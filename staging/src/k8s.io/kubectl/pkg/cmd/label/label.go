@@ -58,6 +58,7 @@ type LabelOptions struct {
 	local           bool
 	dryRunStrategy  cmdutil.DryRunStrategy
 	all             bool
+	allNamespaces   bool
 	resourceVersion string
 	selector        string
 	fieldSelector   string
@@ -147,6 +148,7 @@ func NewCmdLabel(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cobr
 	cmd.Flags().StringVarP(&o.selector, "selector", "l", o.selector, "Selector (label query) to filter on, not including uninitialized ones, supports '=', '==', and '!='.(e.g. -l key1=value1,key2=value2).")
 	cmd.Flags().StringVar(&o.fieldSelector, "field-selector", o.fieldSelector, "Selector (field query) to filter on, supports '=', '==', and '!='.(e.g. --field-selector key1=value1,key2=value2). The server only supports a limited number of field queries per type.")
 	cmd.Flags().BoolVar(&o.all, "all", o.all, "Select all resources, including uninitialized ones, in the namespace of the specified resource types")
+	cmd.Flags().BoolVarP(&o.allNamespaces, "all-namespaces", "A", o.allNamespaces, "If true, check the specified action in all namespaces.")
 	cmd.Flags().StringVar(&o.resourceVersion, "resource-version", o.resourceVersion, i18n.T("If non-empty, the labels update will only succeed if this is the current resource-version for the object. Only valid when specifying a single resource."))
 	usage := "identifying the resource to update the labels"
 	cmdutil.AddFilenameOptionFlags(cmd, &o.FilenameOptions, usage)
@@ -175,11 +177,7 @@ func (o *LabelOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args []st
 	if err != nil {
 		return err
 	}
-	discoveryClient, err := f.ToDiscoveryClient()
-	if err != nil {
-		return err
-	}
-	o.dryRunVerifier = resource.NewDryRunVerifier(dynamicClient, discoveryClient)
+	o.dryRunVerifier = resource.NewDryRunVerifier(dynamicClient, f.OpenAPIGetter())
 
 	cmdutil.PrintFlagsWithDryRunStrategy(o.PrintFlags, o.dryRunStrategy)
 	o.ToPrinter = func(operation string) (printers.ResourcePrinter, error) {
@@ -213,17 +211,26 @@ func (o *LabelOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args []st
 
 // Validate checks to the LabelOptions to see if there is sufficient information run the command.
 func (o *LabelOptions) Validate() error {
-	if o.local && o.dryRunStrategy == cmdutil.DryRunServer {
-		return fmt.Errorf("cannot specify --local and --dry-run=server - did you mean --dry-run=client?")
-	}
 	if o.all && len(o.selector) > 0 {
 		return fmt.Errorf("cannot set --all and --selector at the same time")
 	}
 	if o.all && len(o.fieldSelector) > 0 {
 		return fmt.Errorf("cannot set --all and --field-selector at the same time")
 	}
-	if len(o.resources) < 1 && cmdutil.IsFilenameSliceEmpty(o.FilenameOptions.Filenames, o.FilenameOptions.Kustomize) {
-		return fmt.Errorf("one or more resources must be specified as <resource> <name> or <resource>/<name>")
+	if o.local {
+		if o.dryRunStrategy == cmdutil.DryRunServer {
+			return fmt.Errorf("cannot specify --local and --dry-run=server - did you mean --dry-run=client?")
+		}
+		if len(o.resources) > 0 {
+			return fmt.Errorf("can only use local files by -f pod.yaml or --filename=pod.json when --local=true is set")
+		}
+		if cmdutil.IsFilenameSliceEmpty(o.FilenameOptions.Filenames, o.FilenameOptions.Kustomize) {
+			return fmt.Errorf("one or more files must be specified as -f pod.yaml or --filename=pod.json")
+		}
+	} else {
+		if len(o.resources) < 1 && cmdutil.IsFilenameSliceEmpty(o.FilenameOptions.Filenames, o.FilenameOptions.Kustomize) {
+			return fmt.Errorf("one or more resources must be specified as <resource> <name> or <resource>/<name>")
+		}
 	}
 	if len(o.newLabels) < 1 && len(o.removeLabels) < 1 && !o.list {
 		return fmt.Errorf("at least one label update is required")
@@ -244,6 +251,7 @@ func (o *LabelOptions) RunLabel() error {
 	if !o.local {
 		b = b.LabelSelectorParam(o.selector).
 			FieldSelectorParam(o.fieldSelector).
+			AllNamespaces(o.allNamespaces).
 			ResourceTypeOrNameArgs(o.all, o.resources...).
 			Latest()
 	}

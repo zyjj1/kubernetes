@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/version"
-	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 )
 
 func TestGetStaticPodDirectory(t *testing.T) {
@@ -110,41 +109,6 @@ func TestGetStaticPodFilepath(t *testing.T) {
 	}
 }
 
-func TestAddSelfHostedPrefix(t *testing.T) {
-	var tests = []struct {
-		componentName, expected string
-	}{
-		{
-			componentName: "kube-apiserver",
-			expected:      "self-hosted-kube-apiserver",
-		},
-		{
-			componentName: "kube-controller-manager",
-			expected:      "self-hosted-kube-controller-manager",
-		},
-		{
-			componentName: "kube-scheduler",
-			expected:      "self-hosted-kube-scheduler",
-		},
-		{
-			componentName: "foo",
-			expected:      "self-hosted-foo",
-		},
-	}
-	for _, rt := range tests {
-		t.Run(rt.componentName, func(t *testing.T) {
-			actual := AddSelfHostedPrefix(rt.componentName)
-			if actual != rt.expected {
-				t.Errorf(
-					"failed AddSelfHostedPrefix:\n\texpected: %s\n\t  actual: %s",
-					rt.expected,
-					actual,
-				)
-			}
-		})
-	}
-}
-
 func TestEtcdSupportedVersion(t *testing.T) {
 	var supportedEtcdVersion = map[uint8]string{
 		13: "3.2.24",
@@ -202,34 +166,6 @@ func TestEtcdSupportedVersion(t *testing.T) {
 			}
 			if actualError == nil && actualVersion.String() != rt.expectedVersion.String() {
 				t.Errorf("expected version %s, got %s", rt.expectedVersion.String(), actualVersion.String())
-			}
-		})
-	}
-}
-
-func TestGetKubeDNSVersion(t *testing.T) {
-	var tests = []struct {
-		dns      kubeadmapi.DNSAddOnType
-		expected string
-	}{
-		{
-			dns:      kubeadmapi.KubeDNS,
-			expected: KubeDNSVersion,
-		},
-		{
-			dns:      kubeadmapi.CoreDNS,
-			expected: CoreDNSVersion,
-		},
-	}
-	for _, rt := range tests {
-		t.Run(string(rt.dns), func(t *testing.T) {
-			actualDNSVersion := GetDNSVersion(rt.dns)
-			if actualDNSVersion != rt.expected {
-				t.Errorf(
-					"failed GetDNSVersion:\n\texpected: %s\n\t  actual: %s",
-					rt.expected,
-					actualDNSVersion,
-				)
 			}
 		})
 	}

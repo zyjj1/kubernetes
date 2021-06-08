@@ -458,6 +458,22 @@ func (c *AvailableConditionController) updateAPIServiceStatus(originalAPIService
 		return newAPIService, nil
 	}
 
+	orig := apiregistrationv1apihelper.GetAPIServiceConditionByType(originalAPIService, apiregistrationv1.Available)
+	now := apiregistrationv1apihelper.GetAPIServiceConditionByType(newAPIService, apiregistrationv1.Available)
+	unknown := apiregistrationv1.APIServiceCondition{
+		Type:   apiregistrationv1.Available,
+		Status: apiregistrationv1.ConditionUnknown,
+	}
+	if orig == nil {
+		orig = &unknown
+	}
+	if now == nil {
+		now = &unknown
+	}
+	if *orig != *now {
+		klog.V(2).InfoS("changing APIService availability", "name", newAPIService.Name, "oldStatus", orig.Status, "newStatus", now.Status, "message", now.Message, "reason", now.Reason)
+	}
+
 	newAPIService, err := c.apiServiceClient.APIServices().UpdateStatus(context.TODO(), newAPIService, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, err
@@ -472,8 +488,8 @@ func (c *AvailableConditionController) Run(threadiness int, stopCh <-chan struct
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
-	klog.Infof("Starting AvailableConditionController")
-	defer klog.Infof("Shutting down AvailableConditionController")
+	klog.Info("Starting AvailableConditionController")
+	defer klog.Info("Shutting down AvailableConditionController")
 
 	if !controllers.WaitForCacheSync("AvailableConditionController", stopCh, c.apiServiceSynced, c.servicesSynced, c.endpointsSynced) {
 		return

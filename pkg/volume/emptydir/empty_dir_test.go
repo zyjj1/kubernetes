@@ -35,7 +35,6 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/volume"
 	volumetest "k8s.io/kubernetes/pkg/volume/testing"
-	"k8s.io/kubernetes/pkg/volume/util"
 	volumeutil "k8s.io/kubernetes/pkg/volume/util"
 	"k8s.io/mount-utils"
 )
@@ -47,7 +46,7 @@ func makePluginUnderTest(t *testing.T, plugName, basePath string) volume.VolumeP
 
 	plug, err := plugMgr.FindPluginByName(plugName)
 	if err != nil {
-		t.Errorf("Can't find the plugin by name")
+		t.Fatal("Can't find the plugin by name")
 	}
 	return plug
 }
@@ -193,7 +192,7 @@ func doTestPlugin(t *testing.T, config pluginTestConfig) {
 				Path: volumePath,
 			},
 		}
-		util.SetReady(metadataDir)
+		volumeutil.SetReady(metadataDir)
 	}
 
 	mounter, err := plug.(*emptyDirPlugin).newMounterInternal(volume.NewSpecFromVolume(spec),
@@ -272,7 +271,7 @@ func doTestPlugin(t *testing.T, config pluginTestConfig) {
 
 func testSetUp(mounter volume.Mounter, metadataDir, volPath string) error {
 	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
-		return fmt.Errorf("Expected success, got: %v", err)
+		return fmt.Errorf("expected success, got: %w", err)
 	}
 	// Stat the directory and check the permission bits
 	if !volumeutil.IsReady(metadataDir) {
@@ -286,7 +285,7 @@ func testSetUp(mounter volume.Mounter, metadataDir, volPath string) error {
 		return fmt.Errorf("SetUp() failed: %v", err)
 	}
 	if e, a := perm, fileinfo.Mode().Perm(); e != a {
-		return fmt.Errorf("Unexpected file mode for %v: expected: %v, got: %v", volPath, e, a)
+		return fmt.Errorf("unexpected file mode for %v: expected: %v, got: %v", volPath, e, a)
 	}
 	return nil
 }

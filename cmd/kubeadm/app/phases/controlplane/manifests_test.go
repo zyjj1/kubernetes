@@ -33,6 +33,7 @@ import (
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/features"
 	"k8s.io/kubernetes/cmd/kubeadm/app/phases/certs"
+	pkiutiltesting "k8s.io/kubernetes/cmd/kubeadm/app/util/pkiutil/testing"
 	staticpodutil "k8s.io/kubernetes/cmd/kubeadm/app/util/staticpod"
 	testutil "k8s.io/kubernetes/cmd/kubeadm/test"
 )
@@ -203,7 +204,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 			endpoint: &kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "1.2.3.4"},
 			expected: []string{
 				"kube-apiserver",
-				"--insecure-port=0",
 				"--enable-admission-plugins=NodeRestriction",
 				"--service-cluster-ip-range=bar",
 				"--service-account-key-file=" + testCertsDir + "/sa.pub",
@@ -242,7 +242,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 			endpoint: &kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "2001:db8::1"},
 			expected: []string{
 				"kube-apiserver",
-				"--insecure-port=0",
 				"--enable-admission-plugins=NodeRestriction",
 				"--service-cluster-ip-range=bar",
 				"--service-account-key-file=" + testCertsDir + "/sa.pub",
@@ -289,7 +288,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 			endpoint: &kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "2001:db8::1"},
 			expected: []string{
 				"kube-apiserver",
-				"--insecure-port=0",
 				"--enable-admission-plugins=NodeRestriction",
 				"--service-cluster-ip-range=bar",
 				"--service-account-key-file=" + testCertsDir + "/sa.pub",
@@ -333,7 +331,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 			endpoint: &kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "2001:db8::1"},
 			expected: []string{
 				"kube-apiserver",
-				"--insecure-port=0",
 				"--enable-admission-plugins=NodeRestriction",
 				"--service-cluster-ip-range=bar",
 				"--service-account-key-file=" + testCertsDir + "/sa.pub",
@@ -379,7 +376,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 			endpoint: &kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "1.2.3.4"},
 			expected: []string{
 				"kube-apiserver",
-				"--insecure-port=0",
 				"--enable-admission-plugins=NodeRestriction",
 				"--service-cluster-ip-range=baz",
 				"--service-account-key-file=" + testCertsDir + "/sa.pub",
@@ -427,7 +423,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 			endpoint: &kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "1.2.3.4"},
 			expected: []string{
 				"kube-apiserver",
-				"--insecure-port=0",
 				"--enable-admission-plugins=NodeRestriction",
 				"--service-cluster-ip-range=bar",
 				"--service-account-key-file=" + testCertsDir + "/sa.pub",
@@ -458,52 +453,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 			},
 		},
 		{
-			name: "insecure-port extra-args",
-			cfg: &kubeadmapi.ClusterConfiguration{
-				Networking:      kubeadmapi.Networking{ServiceSubnet: "bar", DNSDomain: "cluster.local"},
-				CertificatesDir: testCertsDir,
-				APIServer: kubeadmapi.APIServer{
-					ControlPlaneComponent: kubeadmapi.ControlPlaneComponent{
-						ExtraArgs: map[string]string{
-							"insecure-port": "1234",
-						},
-					},
-				},
-			},
-			endpoint: &kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "1.2.3.4"},
-			expected: []string{
-				"kube-apiserver",
-				"--insecure-port=1234",
-				"--enable-admission-plugins=NodeRestriction",
-				"--service-cluster-ip-range=bar",
-				"--service-account-key-file=" + testCertsDir + "/sa.pub",
-				"--service-account-signing-key-file=" + testCertsDir + "/sa.key",
-				"--service-account-issuer=https://kubernetes.default.svc.cluster.local",
-				"--client-ca-file=" + testCertsDir + "/ca.crt",
-				"--tls-cert-file=" + testCertsDir + "/apiserver.crt",
-				"--tls-private-key-file=" + testCertsDir + "/apiserver.key",
-				"--kubelet-client-certificate=" + testCertsDir + "/apiserver-kubelet-client.crt",
-				"--kubelet-client-key=" + testCertsDir + "/apiserver-kubelet-client.key",
-				"--enable-bootstrap-token-auth=true",
-				"--secure-port=123",
-				"--allow-privileged=true",
-				"--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname",
-				"--proxy-client-cert-file=/var/lib/certs/front-proxy-client.crt",
-				"--proxy-client-key-file=/var/lib/certs/front-proxy-client.key",
-				"--requestheader-username-headers=X-Remote-User",
-				"--requestheader-group-headers=X-Remote-Group",
-				"--requestheader-extra-headers-prefix=X-Remote-Extra-",
-				"--requestheader-client-ca-file=" + testCertsDir + "/front-proxy-ca.crt",
-				"--requestheader-allowed-names=front-proxy-client",
-				"--authorization-mode=Node,RBAC",
-				"--advertise-address=1.2.3.4",
-				fmt.Sprintf("--etcd-servers=https://127.0.0.1:%d", kubeadmconstants.EtcdListenClientPort),
-				"--etcd-cafile=" + testCertsDir + "/etcd/ca.crt",
-				"--etcd-certfile=" + testCertsDir + "/apiserver-etcd-client.crt",
-				"--etcd-keyfile=" + testCertsDir + "/apiserver-etcd-client.key",
-			},
-		},
-		{
 			name: "authorization-mode extra-args Webhook",
 			cfg: &kubeadmapi.ClusterConfiguration{
 				Networking:      kubeadmapi.Networking{ServiceSubnet: "bar", DNSDomain: "cluster.local"},
@@ -523,7 +472,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 			endpoint: &kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "1.2.3.4"},
 			expected: []string{
 				"kube-apiserver",
-				"--insecure-port=0",
 				"--enable-admission-plugins=NodeRestriction",
 				"--service-cluster-ip-range=bar",
 				"--service-account-key-file=" + testCertsDir + "/sa.pub",
@@ -597,6 +545,7 @@ func TestGetControllerManagerCommand(t *testing.T) {
 				KubernetesVersion: cpVersion,
 				CertificatesDir:   testCertsDir,
 				ClusterName:       "some-other-cluster-name",
+				FeatureGates:      map[string]bool{features.IPv6DualStack: false},
 			},
 			expected: []string{
 				"kube-controller-manager",
@@ -614,6 +563,7 @@ func TestGetControllerManagerCommand(t *testing.T) {
 				"--authorization-kubeconfig=" + kubeadmconstants.KubernetesDir + "/controller-manager.conf",
 				"--client-ca-file=" + testCertsDir + "/ca.crt",
 				"--requestheader-client-ca-file=" + testCertsDir + "/front-proxy-ca.crt",
+				"--feature-gates=IPv6DualStack=false",
 				"--cluster-name=some-other-cluster-name",
 			},
 		},
@@ -678,6 +628,7 @@ func TestGetControllerManagerCommand(t *testing.T) {
 				},
 				CertificatesDir:   testCertsDir,
 				KubernetesVersion: cpVersion,
+				FeatureGates:      map[string]bool{features.IPv6DualStack: false},
 			},
 			expected: []string{
 				"kube-controller-manager",
@@ -695,6 +646,7 @@ func TestGetControllerManagerCommand(t *testing.T) {
 				"--authorization-kubeconfig=" + kubeadmconstants.KubernetesDir + "/controller-manager.conf",
 				"--client-ca-file=" + testCertsDir + "/ca.crt",
 				"--requestheader-client-ca-file=" + testCertsDir + "/front-proxy-ca.crt",
+				"--feature-gates=IPv6DualStack=false",
 				"--allocate-node-cidrs=true",
 				"--cluster-cidr=10.0.1.15/16",
 				"--service-cluster-ip-range=172.20.0.0/24",
@@ -765,6 +717,41 @@ func TestGetControllerManagerCommand(t *testing.T) {
 			},
 		},
 		{
+			name: "IPv6 networking custom extra-args for " + cpVersion,
+			cfg: &kubeadmapi.ClusterConfiguration{
+				Networking: kubeadmapi.Networking{
+					PodSubnet:     "2001:db8::/64",
+					ServiceSubnet: "fd03::/112",
+					DNSDomain:     "cluster.local",
+				},
+				ControllerManager: kubeadmapi.ControlPlaneComponent{
+					ExtraArgs: map[string]string{"allocate-node-cidrs": "false"},
+				},
+				CertificatesDir:   testCertsDir,
+				KubernetesVersion: cpVersion,
+			},
+			expected: []string{
+				"kube-controller-manager",
+				"--port=0",
+				"--bind-address=127.0.0.1",
+				"--leader-elect=true",
+				"--kubeconfig=" + kubeadmconstants.KubernetesDir + "/controller-manager.conf",
+				"--root-ca-file=" + testCertsDir + "/ca.crt",
+				"--service-account-private-key-file=" + testCertsDir + "/sa.key",
+				"--cluster-signing-cert-file=" + testCertsDir + "/ca.crt",
+				"--cluster-signing-key-file=" + testCertsDir + "/ca.key",
+				"--use-service-account-credentials=true",
+				"--controllers=*,bootstrapsigner,tokencleaner",
+				"--authentication-kubeconfig=" + kubeadmconstants.KubernetesDir + "/controller-manager.conf",
+				"--authorization-kubeconfig=" + kubeadmconstants.KubernetesDir + "/controller-manager.conf",
+				"--client-ca-file=" + testCertsDir + "/ca.crt",
+				"--requestheader-client-ca-file=" + testCertsDir + "/front-proxy-ca.crt",
+				"--allocate-node-cidrs=false",
+				"--cluster-cidr=2001:db8::/64",
+				"--service-cluster-ip-range=fd03::/112",
+			},
+		},
+		{
 			name: "dual-stack networking for " + cpVersion,
 			cfg: &kubeadmapi.ClusterConfiguration{
 				Networking: kubeadmapi.Networking{
@@ -810,7 +797,6 @@ func TestGetControllerManagerCommand(t *testing.T) {
 				},
 				CertificatesDir:   testCertsDir,
 				KubernetesVersion: cpVersion,
-				FeatureGates:      map[string]bool{features.IPv6DualStack: true},
 			},
 			expected: []string{
 				"kube-controller-manager",
@@ -828,7 +814,6 @@ func TestGetControllerManagerCommand(t *testing.T) {
 				"--authorization-kubeconfig=" + kubeadmconstants.KubernetesDir + "/controller-manager.conf",
 				"--client-ca-file=" + testCertsDir + "/ca.crt",
 				"--requestheader-client-ca-file=" + testCertsDir + "/front-proxy-ca.crt",
-				"--feature-gates=IPv6DualStack=true",
 				"--allocate-node-cidrs=true",
 				"--cluster-cidr=10.0.1.15/16,2001:db8::/64",
 				"--node-cidr-mask-size-ipv4=20",
@@ -920,6 +905,8 @@ func TestGetControllerManagerCommandExternalCA(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			pkiutiltesting.Reset()
+
 			// Create temp folder for the test case
 			tmpdir := testutil.SetupTempDir(t)
 			defer os.RemoveAll(tmpdir)

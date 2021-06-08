@@ -25,6 +25,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/validation"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/feature"
 )
 
 // MostAllocated is a score plugin that favors nodes with high allocation based on requested resources.
@@ -46,8 +47,8 @@ func (ma *MostAllocated) Name() string {
 // Score invoked at the Score extension point.
 func (ma *MostAllocated) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
 	nodeInfo, err := ma.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
-	if err != nil || nodeInfo.Node() == nil {
-		return 0, framework.NewStatus(framework.Error, fmt.Sprintf("getting node %q from Snapshot: %v, node is nil: %v", nodeName, err, nodeInfo.Node() == nil))
+	if err != nil {
+		return 0, framework.AsStatus(fmt.Errorf("getting node %q from Snapshot: %w", nodeName, err))
 	}
 
 	// ma.score favors nodes with most requested resources.
@@ -63,13 +64,12 @@ func (ma *MostAllocated) ScoreExtensions() framework.ScoreExtensions {
 }
 
 // NewMostAllocated initializes a new plugin and returns it.
-func NewMostAllocated(maArgs runtime.Object, h framework.Handle) (framework.Plugin, error) {
+func NewMostAllocated(maArgs runtime.Object, h framework.Handle, fts feature.Features) (framework.Plugin, error) {
 	args, ok := maArgs.(*config.NodeResourcesMostAllocatedArgs)
 	if !ok {
 		return nil, fmt.Errorf("want args to be of type NodeResourcesMostAllocatedArgs, got %T", args)
 	}
-
-	if err := validation.ValidateNodeResourcesMostAllocatedArgs(args); err != nil {
+	if err := validation.ValidateNodeResourcesMostAllocatedArgs(nil, args); err != nil {
 		return nil, err
 	}
 
@@ -84,6 +84,7 @@ func NewMostAllocated(maArgs runtime.Object, h framework.Handle) (framework.Plug
 			Name:                MostAllocatedName,
 			scorer:              mostResourceScorer(resToWeightMap),
 			resourceToWeightMap: resToWeightMap,
+			enablePodOverhead:   fts.EnablePodOverhead,
 		},
 	}, nil
 }
@@ -95,6 +96,9 @@ func mostResourceScorer(resToWeightMap resourceToWeightMap) func(requested, allo
 			resourceScore := mostRequestedScore(requested[resource], allocable[resource])
 			nodeScore += resourceScore * weight
 			weightSum += weight
+		}
+		if weightSum == 0 {
+			return 0
 		}
 		return (nodeScore / weightSum)
 	}

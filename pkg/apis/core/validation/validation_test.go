@@ -18,7 +18,6 @@ package validation
 
 import (
 	"bytes"
-	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -33,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/component-base/featuregate"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/capabilities"
@@ -4446,7 +4446,7 @@ func TestAlphaLocalStorageCapacityIsolation(t *testing.T) {
 				resource.BinarySI),
 		},
 	}
-	if errs := ValidateResourceRequirements(&containerLimitCase, field.NewPath("resources")); len(errs) != 0 {
+	if errs := ValidateResourceRequirements(&containerLimitCase, field.NewPath("resources"), PodValidationOptions{}); len(errs) != 0 {
 		t.Errorf("expected success: %v", errs)
 	}
 }
@@ -4479,7 +4479,7 @@ func TestValidateResourceQuotaWithAlphaLocalStorageCapacityIsolation(t *testing.
 		Spec: spec,
 	}
 
-	if errs := ValidateResourceQuota(resourceQuota); len(errs) != 0 {
+	if errs := ValidateResourceQuota(resourceQuota, ResourceQuotaValidationOptions{}); len(errs) != 0 {
 		t.Errorf("expected success: %v", errs)
 	}
 }
@@ -6283,6 +6283,20 @@ func TestValidateContainers(t *testing.T) {
 				TerminationMessagePolicy: "File",
 			},
 		},
+		"invalid readiness probe, terminationGracePeriodSeconds set.": {
+			{
+				Name:  "life-123",
+				Image: "image",
+				ReadinessProbe: &core.Probe{
+					Handler: core.Handler{
+						TCPSocket: &core.TCPSocketAction{},
+					},
+					TerminationGracePeriodSeconds: utilpointer.Int64Ptr(10),
+				},
+				ImagePullPolicy:          "IfNotPresent",
+				TerminationMessagePolicy: "File",
+			},
+		},
 		"invalid liveness probe, no tcp socket port.": {
 			{
 				Name:  "life-123",
@@ -6516,14 +6530,14 @@ func TestValidateRestartPolicy(t *testing.T) {
 }
 
 func TestValidateDNSPolicy(t *testing.T) {
-	successCases := []core.DNSPolicy{core.DNSClusterFirst, core.DNSDefault, core.DNSPolicy(core.DNSClusterFirst), core.DNSNone}
+	successCases := []core.DNSPolicy{core.DNSClusterFirst, core.DNSDefault, core.DNSClusterFirstWithHostNet, core.DNSNone}
 	for _, policy := range successCases {
 		if errs := validateDNSPolicy(&policy, field.NewPath("field")); len(errs) != 0 {
 			t.Errorf("expected success: %v", errs)
 		}
 	}
 
-	errorCases := []core.DNSPolicy{core.DNSPolicy("invalid")}
+	errorCases := []core.DNSPolicy{core.DNSPolicy("invalid"), core.DNSPolicy("")}
 	for _, policy := range errorCases {
 		if errs := validateDNSPolicy(&policy, field.NewPath("field")); len(errs) == 0 {
 			t.Errorf("expected failure for %v", policy)
@@ -6547,6 +6561,7 @@ func TestValidatePodDNSConfig(t *testing.T) {
 		desc          string
 		dnsConfig     *core.PodDNSConfig
 		dnsPolicy     *core.DNSPolicy
+		opts          PodValidationOptions
 		expectedError bool
 	}{
 		{
@@ -6593,7 +6608,7 @@ func TestValidatePodDNSConfig(t *testing.T) {
 			expectedError: false,
 		},
 		{
-			desc: "valid: 3 nameservers and 6 search paths",
+			desc: "valid: 3 nameservers and 6 search paths(legacy)",
 			dnsConfig: &core.PodDNSConfig{
 				Nameservers: []string{"127.0.0.1", "10.0.0.10", "8.8.8.8"},
 				Searches:    []string{"custom", "mydomain.com", "local", "cluster.local", "svc.cluster.local", "default.svc.cluster.local."},
@@ -6601,7 +6616,18 @@ func TestValidatePodDNSConfig(t *testing.T) {
 			expectedError: false,
 		},
 		{
-			desc: "valid: 256 characters in search path list",
+			desc: "valid: 3 nameservers and 32 search paths",
+			dnsConfig: &core.PodDNSConfig{
+				Nameservers: []string{"127.0.0.1", "10.0.0.10", "8.8.8.8"},
+				Searches:    []string{"custom", "mydomain.com", "local", "cluster.local", "svc.cluster.local", "default.svc.cluster.local.", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32"},
+			},
+			opts: PodValidationOptions{
+				AllowExpandedDNSConfig: true,
+			},
+			expectedError: false,
+		},
+		{
+			desc: "valid: 256 characters in search path list(legacy)",
 			dnsConfig: &core.PodDNSConfig{
 				// We can have 256 - (6 - 1) = 251 characters in total for 6 search paths.
 				Searches: []string{
@@ -6612,6 +6638,50 @@ func TestValidatePodDNSConfig(t *testing.T) {
 					generateTestSearchPathFunc(50),
 					generateTestSearchPathFunc(50),
 				},
+			},
+			expectedError: false,
+		},
+		{
+			desc: "valid: 2048 characters in search path list",
+			dnsConfig: &core.PodDNSConfig{
+				// We can have 2048 - (32 - 1) = 2017 characters in total for 32 search paths.
+				Searches: []string{
+					generateTestSearchPathFunc(64),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+				},
+			},
+			opts: PodValidationOptions{
+				AllowExpandedDNSConfig: true,
 			},
 			expectedError: false,
 		},
@@ -6630,9 +6700,19 @@ func TestValidatePodDNSConfig(t *testing.T) {
 			expectedError: true,
 		},
 		{
-			desc: "invalid: 7 search paths",
+			desc: "invalid: 7 search paths(legacy)",
 			dnsConfig: &core.PodDNSConfig{
 				Searches: []string{"custom", "mydomain.com", "local", "cluster.local", "svc.cluster.local", "default.svc.cluster.local", "exceeded"},
+			},
+			expectedError: true,
+		},
+		{
+			desc: "invalid: 33 search paths",
+			dnsConfig: &core.PodDNSConfig{
+				Searches: []string{"custom", "mydomain.com", "local", "cluster.local", "svc.cluster.local", "default.svc.cluster.local.", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33"},
+			},
+			opts: PodValidationOptions{
+				AllowExpandedDNSConfig: true,
 			},
 			expectedError: true,
 		},
@@ -6648,6 +6728,50 @@ func TestValidatePodDNSConfig(t *testing.T) {
 					generateTestSearchPathFunc(50),
 					generateTestSearchPathFunc(50),
 				},
+			},
+			expectedError: true,
+		},
+		{
+			desc: "invalid: 2049 characters in search path list",
+			dnsConfig: &core.PodDNSConfig{
+				// We can have 2048 - (32 - 1) = 2017 characters in total for 32 search paths.
+				Searches: []string{
+					generateTestSearchPathFunc(65),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+					generateTestSearchPathFunc(63),
+				},
+			},
+			opts: PodValidationOptions{
+				AllowExpandedDNSConfig: true,
 			},
 			expectedError: true,
 		},
@@ -6689,7 +6813,7 @@ func TestValidatePodDNSConfig(t *testing.T) {
 			tc.dnsPolicy = &testDNSClusterFirst
 		}
 
-		errs := validatePodDNSConfig(tc.dnsConfig, tc.dnsPolicy, field.NewPath("dnsConfig"))
+		errs := validatePodDNSConfig(tc.dnsConfig, tc.dnsPolicy, field.NewPath("dnsConfig"), tc.opts)
 		if len(errs) != 0 && !tc.expectedError {
 			t.Errorf("%v: validatePodDNSConfig(%v) = %v, want nil", tc.desc, tc.dnsConfig, errs)
 		} else if len(errs) == 0 && tc.expectedError {
@@ -7405,6 +7529,15 @@ func TestValidatePod(t *testing.T) {
 							},
 							TopologyKey: "zone",
 							Namespaces:  []string{"ns"},
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchExpressions: []metav1.LabelSelectorRequirement{
+									{
+										Key:      "key",
+										Operator: metav1.LabelSelectorOpIn,
+										Values:   []string{"value1", "value2"},
+									},
+								},
+							},
 						},
 					},
 					PreferredDuringSchedulingIgnoredDuringExecution: []core.WeightedPodAffinityTerm{
@@ -7838,6 +7971,22 @@ func TestValidatePod(t *testing.T) {
 				DNSPolicy:     core.DNSClusterFirst,
 			},
 		},
+		"negative pod-deletion-cost": {
+			ObjectMeta: metav1.ObjectMeta{Name: "123", Namespace: "ns", Annotations: map[string]string{core.PodDeletionCost: "-100"}},
+			Spec: core.PodSpec{
+				Containers:    []core.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent", TerminationMessagePolicy: "File"}},
+				RestartPolicy: core.RestartPolicyAlways,
+				DNSPolicy:     core.DNSClusterFirst,
+			},
+		},
+		"positive pod-deletion-cost": {
+			ObjectMeta: metav1.ObjectMeta{Name: "123", Namespace: "ns", Annotations: map[string]string{core.PodDeletionCost: "100"}},
+			Spec: core.PodSpec{
+				Containers:    []core.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent", TerminationMessagePolicy: "File"}},
+				RestartPolicy: core.RestartPolicyAlways,
+				DNSPolicy:     core.DNSClusterFirst,
+			},
+		},
 	}
 	for k, v := range successCases {
 		t.Run(k, func(t *testing.T) {
@@ -8122,7 +8271,7 @@ func TestValidatePod(t *testing.T) {
 			},
 		},
 		"invalid labelSelector in preferredDuringSchedulingIgnoredDuringExecution in podaffinity annotations, values should be empty if the operator is Exists": {
-			expectedError: "spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.matchExpressions.matchExpressions[0].values",
+			expectedError: "spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.labelSelector.matchExpressions[0].values",
 			spec: core.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "123",
@@ -8152,7 +8301,68 @@ func TestValidatePod(t *testing.T) {
 				}),
 			},
 		},
-		"invalid name space in preferredDuringSchedulingIgnoredDuringExecution in podaffinity annotations, name space shouldbe valid": {
+		"invalid namespaceSelector in preferredDuringSchedulingIgnoredDuringExecution in podaffinity, In operator must include Values": {
+			expectedError: "spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.namespaceSelector.matchExpressions[0].values",
+			spec: core.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "123",
+					Namespace: "ns",
+				},
+				Spec: validPodSpec(&core.Affinity{
+					PodAntiAffinity: &core.PodAntiAffinity{
+						PreferredDuringSchedulingIgnoredDuringExecution: []core.WeightedPodAffinityTerm{
+							{
+								Weight: 10,
+								PodAffinityTerm: core.PodAffinityTerm{
+									NamespaceSelector: &metav1.LabelSelector{
+										MatchExpressions: []metav1.LabelSelectorRequirement{
+											{
+												Key:      "key2",
+												Operator: metav1.LabelSelectorOpIn,
+											},
+										},
+									},
+									Namespaces:  []string{"ns"},
+									TopologyKey: "region",
+								},
+							},
+						},
+					},
+				}),
+			},
+		},
+		"invalid namespaceSelector in preferredDuringSchedulingIgnoredDuringExecution in podaffinity, Exists operator can not have values": {
+			expectedError: "spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.namespaceSelector.matchExpressions[0].values",
+			spec: core.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "123",
+					Namespace: "ns",
+				},
+				Spec: validPodSpec(&core.Affinity{
+					PodAntiAffinity: &core.PodAntiAffinity{
+						PreferredDuringSchedulingIgnoredDuringExecution: []core.WeightedPodAffinityTerm{
+							{
+								Weight: 10,
+								PodAffinityTerm: core.PodAffinityTerm{
+									NamespaceSelector: &metav1.LabelSelector{
+										MatchExpressions: []metav1.LabelSelectorRequirement{
+											{
+												Key:      "key2",
+												Operator: metav1.LabelSelectorOpExists,
+												Values:   []string{"value1", "value2"},
+											},
+										},
+									},
+									Namespaces:  []string{"ns"},
+									TopologyKey: "region",
+								},
+							},
+						},
+					},
+				}),
+			},
+		},
+		"invalid name space in preferredDuringSchedulingIgnoredDuringExecution in podaffinity annotations, namespace should be valid": {
 			expectedError: "spec.affinity.podAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.namespace",
 			spec: core.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -8764,10 +8974,43 @@ func TestValidatePod(t *testing.T) {
 				},
 			},
 		},
+		"invalid pod-deletion-cost": {
+			expectedError: "metadata.annotations[controller.kubernetes.io/pod-deletion-cost]: Invalid value: \"text\": must be a 32bit integer",
+			spec: core.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "123", Namespace: "ns", Annotations: map[string]string{core.PodDeletionCost: "text"}},
+				Spec: core.PodSpec{
+					Containers:    []core.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent", TerminationMessagePolicy: "File"}},
+					RestartPolicy: core.RestartPolicyAlways,
+					DNSPolicy:     core.DNSClusterFirst,
+				},
+			},
+		},
+		"invalid leading zeros pod-deletion-cost": {
+			expectedError: "metadata.annotations[controller.kubernetes.io/pod-deletion-cost]: Invalid value: \"008\": must be a 32bit integer",
+			spec: core.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "123", Namespace: "ns", Annotations: map[string]string{core.PodDeletionCost: "008"}},
+				Spec: core.PodSpec{
+					Containers:    []core.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent", TerminationMessagePolicy: "File"}},
+					RestartPolicy: core.RestartPolicyAlways,
+					DNSPolicy:     core.DNSClusterFirst,
+				},
+			},
+		},
+		"invalid leading plus sign pod-deletion-cost": {
+			expectedError: "metadata.annotations[controller.kubernetes.io/pod-deletion-cost]: Invalid value: \"+10\": must be a 32bit integer",
+			spec: core.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "123", Namespace: "ns", Annotations: map[string]string{core.PodDeletionCost: "+10"}},
+				Spec: core.PodSpec{
+					Containers:    []core.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent", TerminationMessagePolicy: "File"}},
+					RestartPolicy: core.RestartPolicyAlways,
+					DNSPolicy:     core.DNSClusterFirst,
+				},
+			},
+		},
 	}
 	for k, v := range errorCases {
 		t.Run(k, func(t *testing.T) {
-			if errs := ValidatePodCreate(&v.spec, PodValidationOptions{}); len(errs) == 0 {
+			if errs := ValidatePodCreate(&v.spec, PodValidationOptions{AllowInvalidPodDeletionCost: false}); len(errs) == 0 {
 				t.Errorf("expected failure")
 			} else if v.expectedError == "" {
 				t.Errorf("missing expectedError, got %q", errs.ToAggregate().Error())
@@ -9711,7 +9954,7 @@ func TestValidatePodStatusUpdate(t *testing.T) {
 	for _, test := range tests {
 		test.new.ObjectMeta.ResourceVersion = "1"
 		test.old.ObjectMeta.ResourceVersion = "1"
-		errs := ValidatePodStatusUpdate(&test.new, &test.old)
+		errs := ValidatePodStatusUpdate(&test.new, &test.old, PodValidationOptions{})
 		if test.err == "" {
 			if len(errs) != 0 {
 				t.Errorf("unexpected invalid: %s (%+v)\nA: %+v\nB: %+v", test.test, errs, test.new, test.old)
@@ -10009,16 +10252,15 @@ func TestValidatePodEphemeralContainersUpdate(t *testing.T) {
 }
 
 func TestValidateServiceCreate(t *testing.T) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ServiceTopology, true)()
-
 	requireDualStack := core.IPFamilyPolicyRequireDualStack
 	singleStack := core.IPFamilyPolicySingleStack
 	preferDualStack := core.IPFamilyPolicyPreferDualStack
 
 	testCases := []struct {
-		name     string
-		tweakSvc func(svc *core.Service) // given a basic valid service, each test case can customize it
-		numErrs  int
+		name         string
+		tweakSvc     func(svc *core.Service) // given a basic valid service, each test case can customize it
+		numErrs      int
+		featureGates []featuregate.Feature
 	}{
 		{
 			name: "missing namespace",
@@ -10632,6 +10874,22 @@ func TestValidateServiceCreate(t *testing.T) {
 			numErrs: 1,
 		},
 		{
+			name: "nil internalTraffic field when feature gate is on",
+			tweakSvc: func(s *core.Service) {
+				s.Spec.InternalTrafficPolicy = nil
+			},
+			featureGates: []featuregate.Feature{features.ServiceInternalTrafficPolicy},
+			numErrs:      1,
+		},
+		{
+			name: "invalid internalTraffic field",
+			tweakSvc: func(s *core.Service) {
+				invalid := core.ServiceInternalTrafficPolicyType("invalid")
+				s.Spec.InternalTrafficPolicy = &invalid
+			},
+			numErrs: 1,
+		},
+		{
 			name: "nagative healthCheckNodePort field",
 			tweakSvc: func(s *core.Service) {
 				s.Spec.Type = core.ServiceTypeLoadBalancer
@@ -11054,67 +11312,6 @@ func TestValidateServiceCreate(t *testing.T) {
 			numErrs: 0,
 		},
 
-		/* toplogy keys */
-		{
-			name: "valid topology keys",
-			tweakSvc: func(s *core.Service) {
-				s.Spec.TopologyKeys = []string{
-					"kubernetes.io/hostname",
-					"topology.kubernetes.io/zone",
-					"topology.kubernetes.io/region",
-					v1.TopologyKeyAny,
-				}
-			},
-			numErrs: 0,
-		},
-		{
-			name: "invalid topology key",
-			tweakSvc: func(s *core.Service) {
-				s.Spec.TopologyKeys = []string{"NoUppercaseOrSpecialCharsLike=Equals"}
-			},
-			numErrs: 1,
-		},
-		{
-			name: "too many topology keys",
-			tweakSvc: func(s *core.Service) {
-				for i := 0; i < core.MaxServiceTopologyKeys+1; i++ {
-					s.Spec.TopologyKeys = append(s.Spec.TopologyKeys, fmt.Sprintf("topologykey-%d", i))
-				}
-			},
-			numErrs: 1,
-		},
-		{
-			name: `"Any" was not the last key`,
-			tweakSvc: func(s *core.Service) {
-				s.Spec.TopologyKeys = []string{
-					"kubernetes.io/hostname",
-					v1.TopologyKeyAny,
-					"topology.kubernetes.io/zone",
-				}
-			},
-			numErrs: 1,
-		},
-		{
-			name: `duplicate topology key`,
-			tweakSvc: func(s *core.Service) {
-				s.Spec.TopologyKeys = []string{
-					"kubernetes.io/hostname",
-					"kubernetes.io/hostname",
-					"topology.kubernetes.io/zone",
-				}
-			},
-			numErrs: 1,
-		},
-		{
-			name: `use topology keys with externalTrafficPolicy=Local`,
-			tweakSvc: func(s *core.Service) {
-				s.Spec.ExternalTrafficPolicy = "Local"
-				s.Spec.TopologyKeys = []string{
-					"kubernetes.io/hostname",
-				}
-			},
-			numErrs: 1,
-		},
 		{
 			name: `valid appProtocol`,
 			tweakSvc: func(s *core.Service) {
@@ -11176,10 +11373,37 @@ func TestValidateServiceCreate(t *testing.T) {
 			},
 			numErrs: 1,
 		},
+		{
+			name: "valid LoadBalancerClass when type is LoadBalancer",
+			tweakSvc: func(s *core.Service) {
+				s.Spec.Type = core.ServiceTypeLoadBalancer
+				s.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 0,
+		},
+		{
+			name: "invalid LoadBalancerClass",
+			tweakSvc: func(s *core.Service) {
+				s.Spec.Type = core.ServiceTypeLoadBalancer
+				s.Spec.LoadBalancerClass = utilpointer.StringPtr("Bad/LoadBalancerClass")
+			},
+			numErrs: 1,
+		},
+		{
+			name: "invalid: set LoadBalancerClass when type is not LoadBalancer",
+			tweakSvc: func(s *core.Service) {
+				s.Spec.Type = core.ServiceTypeClusterIP
+				s.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 1,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			for i := range tc.featureGates {
+				defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, tc.featureGates[i], true)()
+			}
 			svc := makeValidService()
 			tc.tweakSvc(&svc)
 			errs := ValidateServiceCreate(&svc)
@@ -13553,6 +13777,143 @@ func TestValidateServiceUpdate(t *testing.T) {
 			},
 			numErrs: 1,
 		},
+		{
+			name: "update LoadBalancer type of service without change LoadBalancerClass",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				oldSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-old")
+
+				newSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-old")
+			},
+			numErrs: 0,
+		},
+		{
+			name: "invalid: change LoadBalancerClass when update service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				oldSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-old")
+
+				newSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-new")
+			},
+			numErrs: 1,
+		},
+		{
+			name: "invalid: unset LoadBalancerClass when update service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				oldSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-old")
+
+				newSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				newSvc.Spec.LoadBalancerClass = nil
+			},
+			numErrs: 1,
+		},
+		{
+			name: "invalid: set LoadBalancerClass when update service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				oldSvc.Spec.LoadBalancerClass = nil
+
+				newSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-new")
+			},
+			numErrs: 1,
+		},
+		{
+			name: "update to LoadBalancer type of service with valid LoadBalancerClass",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeClusterIP
+
+				newSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 0,
+		},
+		{
+			name: "update to LoadBalancer type of service without LoadBalancerClass",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeClusterIP
+
+				newSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				newSvc.Spec.LoadBalancerClass = nil
+			},
+			numErrs: 0,
+		},
+		{
+			name: "invalid: set invalid LoadBalancerClass when update service to LoadBalancer",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeClusterIP
+
+				newSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("Bad/LoadBalancerclass")
+			},
+			numErrs: 2,
+		},
+		{
+			name: "invalid: set LoadBalancerClass when update service to non LoadBalancer type of service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeClusterIP
+
+				newSvc.Spec.Type = core.ServiceTypeClusterIP
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 2,
+		},
+		{
+			name: "invalid: set LoadBalancerClass when update service to non LoadBalancer type of service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeExternalName
+
+				newSvc.Spec.Type = core.ServiceTypeExternalName
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 3,
+		},
+		{
+			name: "invalid: set LoadBalancerClass when update service to non LoadBalancer type of service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeNodePort
+
+				newSvc.Spec.Type = core.ServiceTypeNodePort
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 2,
+		},
+		{
+			name: "invalid: set LoadBalancerClass when update from LoadBalancer service to non LoadBalancer type of service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				oldSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+
+				newSvc.Spec.Type = core.ServiceTypeClusterIP
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 2,
+		},
+		{
+			name: "invalid: set LoadBalancerClass when update from LoadBalancer service to non LoadBalancer type of service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				oldSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+
+				newSvc.Spec.Type = core.ServiceTypeExternalName
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 3,
+		},
+		{
+			name: "invalid: set LoadBalancerClass when update from LoadBalancer service to non LoadBalancer type of service",
+			tweakSvc: func(oldSvc, newSvc *core.Service) {
+				oldSvc.Spec.Type = core.ServiceTypeLoadBalancer
+				oldSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+
+				newSvc.Spec.Type = core.ServiceTypeNodePort
+				newSvc.Spec.LoadBalancerClass = utilpointer.StringPtr("test.com/test-load-balancer-class")
+			},
+			numErrs: 2,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -14079,6 +14440,14 @@ func TestValidateResourceQuota(t *testing.T) {
 		Scopes: []core.ResourceQuotaScope{core.ResourceQuotaScopeNotBestEffort},
 	}
 
+	crossNamespaceAffinitySpec := core.ResourceQuotaSpec{
+		Hard: core.ResourceList{
+			core.ResourceCPU:       resource.MustParse("100"),
+			core.ResourceLimitsCPU: resource.MustParse("200"),
+		},
+		Scopes: []core.ResourceQuotaScope{core.ResourceQuotaScopeCrossNamespacePodAffinity},
+	}
+
 	scopeSelectorSpec := core.ResourceQuotaSpec{
 		ScopeSelector: &core.ScopeSelector{
 			MatchExpressions: []core.ScopedResourceSelectorRequirement{
@@ -14140,6 +14509,18 @@ func TestValidateResourceQuota(t *testing.T) {
 		Scopes: []core.ResourceQuotaScope{core.ResourceQuotaScopeBestEffort, core.ResourceQuotaScopeNotBestEffort},
 	}
 
+	invalidCrossNamespaceAffinitySpec := core.ResourceQuotaSpec{
+		ScopeSelector: &core.ScopeSelector{
+			MatchExpressions: []core.ScopedResourceSelectorRequirement{
+				{
+					ScopeName: core.ResourceQuotaScopeCrossNamespacePodAffinity,
+					Operator:  core.ScopeSelectorOpIn,
+					Values:    []string{"cluster-services"},
+				},
+			},
+		},
+	}
+
 	invalidScopeNameSpec := core.ResourceQuotaSpec{
 		Hard: core.ResourceList{
 			core.ResourceCPU: resource.MustParse("100"),
@@ -14147,118 +14528,151 @@ func TestValidateResourceQuota(t *testing.T) {
 		Scopes: []core.ResourceQuotaScope{core.ResourceQuotaScope("foo")},
 	}
 
-	successCases := []core.ResourceQuota{
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "abc",
-				Namespace: "foo",
-			},
-			Spec: spec,
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "abc",
-				Namespace: "foo",
-			},
-			Spec: fractionalComputeSpec,
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "abc",
-				Namespace: "foo",
-			},
-			Spec: terminatingSpec,
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "abc",
-				Namespace: "foo",
-			},
-			Spec: nonTerminatingSpec,
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "abc",
-				Namespace: "foo",
-			},
-			Spec: bestEffortSpec,
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "abc",
-				Namespace: "foo",
-			},
-			Spec: scopeSelectorSpec,
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "abc",
-				Namespace: "foo",
-			},
-			Spec: nonBestEffortSpec,
-		},
-	}
-	for _, successCase := range successCases {
-		if errs := ValidateResourceQuota(&successCase); len(errs) != 0 {
-			t.Errorf("expected success: %v", errs)
-		}
-	}
-
-	errorCases := map[string]struct {
-		R core.ResourceQuota
-		D string
+	testCases := map[string]struct {
+		rq                       core.ResourceQuota
+		errDetail                string
+		errField                 string
+		disableNamespaceSelector bool
 	}{
+		"no-scope": {
+			rq: core.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "abc",
+					Namespace: "foo",
+				},
+				Spec: spec,
+			},
+		},
+		"fractional-compute-spec": {
+			rq: core.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "abc",
+					Namespace: "foo",
+				},
+				Spec: fractionalComputeSpec,
+			},
+		},
+		"terminating-spec": {
+			rq: core.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "abc",
+					Namespace: "foo",
+				},
+				Spec: terminatingSpec,
+			},
+		},
+		"non-terminating-spec": {
+			rq: core.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "abc",
+					Namespace: "foo",
+				},
+				Spec: nonTerminatingSpec,
+			},
+		},
+		"best-effort-spec": {
+			rq: core.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "abc",
+					Namespace: "foo",
+				},
+				Spec: bestEffortSpec,
+			},
+		},
+		"cross-namespace-affinity-spec": {
+			rq: core.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "abc",
+					Namespace: "foo",
+				},
+				Spec: crossNamespaceAffinitySpec,
+			},
+		},
+		"scope-selector-spec": {
+			rq: core.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "abc",
+					Namespace: "foo",
+				},
+				Spec: scopeSelectorSpec,
+			},
+		},
+		"non-best-effort-spec": {
+			rq: core.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "abc",
+					Namespace: "foo",
+				},
+				Spec: nonBestEffortSpec,
+			},
+		},
 		"zero-length Name": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "", Namespace: "foo"}, Spec: spec},
-			"name or generateName is required",
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "", Namespace: "foo"}, Spec: spec},
+			errDetail: "name or generateName is required",
 		},
 		"zero-length Namespace": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: ""}, Spec: spec},
-			"",
+			rq:       core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: ""}, Spec: spec},
+			errField: "metadata.namespace",
 		},
 		"invalid Name": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "^Invalid", Namespace: "foo"}, Spec: spec},
-			dnsSubdomainLabelErrMsg,
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "^Invalid", Namespace: "foo"}, Spec: spec},
+			errDetail: dnsSubdomainLabelErrMsg,
 		},
 		"invalid Namespace": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "^Invalid"}, Spec: spec},
-			dnsLabelErrMsg,
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "^Invalid"}, Spec: spec},
+			errDetail: dnsLabelErrMsg,
 		},
 		"negative-limits": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: negativeSpec},
-			isNegativeErrorMsg,
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: negativeSpec},
+			errDetail: isNegativeErrorMsg,
 		},
 		"fractional-api-resource": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: fractionalPodSpec},
-			isNotIntegerErrorMsg,
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: fractionalPodSpec},
+			errDetail: isNotIntegerErrorMsg,
 		},
 		"invalid-quota-resource": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidQuotaResourceSpec},
-			isInvalidQuotaResource,
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidQuotaResourceSpec},
+			errDetail: isInvalidQuotaResource,
 		},
 		"invalid-quota-terminating-pair": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidTerminatingScopePairsSpec},
-			"conflicting scopes",
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidTerminatingScopePairsSpec},
+			errDetail: "conflicting scopes",
 		},
 		"invalid-quota-besteffort-pair": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidBestEffortScopePairsSpec},
-			"conflicting scopes",
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidBestEffortScopePairsSpec},
+			errDetail: "conflicting scopes",
 		},
 		"invalid-quota-scope-name": {
-			core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidScopeNameSpec},
-			"unsupported scope",
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidScopeNameSpec},
+			errDetail: "unsupported scope",
+		},
+		"invalid-cross-namespace-affinity": {
+			rq:        core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidCrossNamespaceAffinitySpec},
+			errDetail: "must be 'Exist' when scope is any of ResourceQuotaScopeTerminating, ResourceQuotaScopeNotTerminating, ResourceQuotaScopeBestEffort, ResourceQuotaScopeNotBestEffort or ResourceQuotaScopeCrossNamespacePodAffinity",
+		},
+		"cross-namespace-affinity-disabled": {
+			rq:                       core.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: crossNamespaceAffinitySpec},
+			errDetail:                "unsupported scope",
+			disableNamespaceSelector: true,
 		},
 	}
-	for k, v := range errorCases {
-		errs := ValidateResourceQuota(&v.R)
-		if len(errs) == 0 {
-			t.Errorf("expected failure for %s", k)
-		}
-		for i := range errs {
-			if !strings.Contains(errs[i].Detail, v.D) {
-				t.Errorf("[%s]: expected error detail either empty or %s, got %s", k, v.D, errs[i].Detail)
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			errs := ValidateResourceQuota(&tc.rq, ResourceQuotaValidationOptions{
+				AllowPodAffinityNamespaceSelector: !tc.disableNamespaceSelector,
+			})
+			if len(tc.errDetail) == 0 && len(tc.errField) == 0 && len(errs) != 0 {
+				t.Errorf("expected success: %v", errs)
+			} else if (len(tc.errDetail) != 0 || len(tc.errField) != 0) && len(errs) == 0 {
+				t.Errorf("expected failure")
+			} else {
+				for i := range errs {
+					if !strings.Contains(errs[i].Detail, tc.errDetail) {
+						t.Errorf("expected error detail either empty or %s, got %s", tc.errDetail, errs[i].Detail)
+					}
+				}
 			}
-		}
+		})
 	}
 }
 
@@ -16238,7 +16652,7 @@ func TestValidateOverhead(t *testing.T) {
 		},
 	}
 	for _, tc := range successCase {
-		if errs := validateOverhead(tc.overhead, field.NewPath("overheads")); len(errs) != 0 {
+		if errs := validateOverhead(tc.overhead, field.NewPath("overheads"), PodValidationOptions{}); len(errs) != 0 {
 			t.Errorf("%q unexpected error: %v", tc.Name, errs)
 		}
 	}
@@ -16255,7 +16669,7 @@ func TestValidateOverhead(t *testing.T) {
 		},
 	}
 	for _, tc := range errorCase {
-		if errs := validateOverhead(tc.overhead, field.NewPath("resources")); len(errs) == 0 {
+		if errs := validateOverhead(tc.overhead, field.NewPath("resources"), PodValidationOptions{}); len(errs) == 0 {
 			t.Errorf("%q expected error", tc.Name)
 		}
 	}
@@ -16350,14 +16764,7 @@ func TestPodIPsValidation(t *testing.T) {
 				oldPod.ResourceVersion = "1"
 				oldPod.Name = newPod.Name
 
-				errs := ValidatePodStatusUpdate(newPod, oldPod)
-				if oldTestCase.expectError {
-					// The old pod was invalid, tolerate invalid IPs in the new pod as well
-					if len(errs) > 0 {
-						t.Fatalf("expected success for update to pod with already-invalid IPs, got errors: %v", errs)
-					}
-					continue
-				}
+				errs := ValidatePodStatusUpdate(newPod, oldPod, PodValidationOptions{})
 
 				if len(errs) == 0 && testCase.expectError {
 					t.Fatalf("expected failure for %s, but there were none", testCase.pod.Name)
@@ -16913,5 +17320,518 @@ func TestValidatePodTemplateSpecSeccomp(t *testing.T) {
 	for i, test := range tests {
 		err := ValidatePodTemplateSpec(test.spec, rootFld, PodValidationOptions{})
 		asserttestify.Equal(t, test.expectedErr, err, "TestCase[%d]: %s", i, test.description)
+	}
+}
+
+func TestValidateResourceRequirements(t *testing.T) {
+	path := field.NewPath("resources")
+	tests := []struct {
+		name         string
+		requirements core.ResourceRequirements
+		opts         PodValidationOptions
+	}{
+		{
+			name: "limits and requests of hugepage resource are equal",
+			requirements: core.ResourceRequirements{
+				Limits: core.ResourceList{
+					core.ResourceCPU: resource.MustParse("10"),
+					core.ResourceName(core.ResourceHugePagesPrefix + "2Mi"): resource.MustParse("2Mi"),
+				},
+				Requests: core.ResourceList{
+					core.ResourceCPU: resource.MustParse("10"),
+					core.ResourceName(core.ResourceHugePagesPrefix + "2Mi"): resource.MustParse("2Mi"),
+				},
+			},
+			opts: PodValidationOptions{},
+		},
+		{
+			name: "limits and requests of memory resource are equal",
+			requirements: core.ResourceRequirements{
+				Limits: core.ResourceList{
+					core.ResourceMemory: resource.MustParse("2Mi"),
+				},
+				Requests: core.ResourceList{
+					core.ResourceMemory: resource.MustParse("2Mi"),
+				},
+			},
+			opts: PodValidationOptions{},
+		},
+		{
+			name: "limits and requests of cpu resource are equal",
+			requirements: core.ResourceRequirements{
+				Limits: core.ResourceList{
+					core.ResourceCPU: resource.MustParse("10"),
+				},
+				Requests: core.ResourceList{
+					core.ResourceCPU: resource.MustParse("10"),
+				},
+			},
+			opts: PodValidationOptions{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if errs := ValidateResourceRequirements(&tc.requirements, path, tc.opts); len(errs) != 0 {
+				t.Errorf("unexpected errors: %v", errs)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name         string
+		requirements core.ResourceRequirements
+		opts         PodValidationOptions
+	}{
+		{
+			name: "hugepage resource without cpu or memory",
+			requirements: core.ResourceRequirements{
+				Limits: core.ResourceList{
+					core.ResourceName(core.ResourceHugePagesPrefix + "2Mi"): resource.MustParse("2Mi"),
+				},
+				Requests: core.ResourceList{
+					core.ResourceName(core.ResourceHugePagesPrefix + "2Mi"): resource.MustParse("2Mi"),
+				},
+			},
+			opts: PodValidationOptions{},
+		},
+	}
+
+	for _, tc := range errTests {
+		t.Run(tc.name, func(t *testing.T) {
+			if errs := ValidateResourceRequirements(&tc.requirements, path, tc.opts); len(errs) == 0 {
+				t.Error("expected errors")
+			}
+		})
+	}
+}
+
+func TestValidateNonSpecialIP(t *testing.T) {
+	fp := field.NewPath("ip")
+
+	// Valid values.
+	for _, tc := range []struct {
+		desc string
+		ip   string
+	}{
+		{"ipv4", "10.1.2.3"},
+		{"ipv6", "2000::1"},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			errs := ValidateNonSpecialIP(tc.ip, fp)
+			if len(errs) != 0 {
+				t.Errorf("ValidateNonSpecialIP(%q, ...) = %v; want nil", tc.ip, errs)
+			}
+		})
+	}
+	// Invalid cases
+	for _, tc := range []struct {
+		desc string
+		ip   string
+	}{
+		{"ipv4 unspecified", "0.0.0.0"},
+		{"ipv6 unspecified", "::0"},
+		{"ipv4 localhost", "127.0.0.0"},
+		{"ipv4 localhost", "127.255.255.255"},
+		{"ipv6 localhost", "::1"},
+		{"ipv6 link local", "fe80::"},
+		{"ipv6 local multicast", "ff02::"},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			errs := ValidateNonSpecialIP(tc.ip, fp)
+			if len(errs) == 0 {
+				t.Errorf("ValidateNonSpecialIP(%q, ...) = nil; want non-nil (errors)", tc.ip)
+			}
+		})
+	}
+}
+
+func TestValidateWindowsHostProcessPod(t *testing.T) {
+	const containerName = "container"
+	falseVar := false
+	trueVar := true
+
+	testCases := []struct {
+		name            string
+		expectError     bool
+		featureEnabled  bool
+		allowPrivileged bool
+		podSpec         *core.PodSpec
+	}{
+		{
+			name:            "Spec with feature disabled and pod-wide HostProcess=false and should not validate",
+			expectError:     true,
+			featureEnabled:  false,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &falseVar,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature disabled and pod-wide HostProcess=nil set should valildate",
+			expectError:     false,
+			featureEnabled:  false,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: nil,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature disabled and container setting HostProcess=true should not valildate",
+			expectError:     true,
+			featureEnabled:  false,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature disabled and init container setting HostProcess=true should not valildate",
+			expectError:     true,
+			featureEnabled:  false,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				InitContainers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, pod-wide HostProcess=true, and HostNetwork unset should not validate",
+			expectError:     true,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &trueVar,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, pod-wide HostProcess=ture, and HostNetwork set should validate",
+			expectError:     false,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &trueVar,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, pod-wide HostProcess=ture, HostNetwork set, and containers setting HostProcess=true should validate",
+			expectError:     false,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &trueVar,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+				InitContainers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, pod-wide HostProcess=nil, HostNetwork set, and all containers setting HostProcess=true should validate",
+			expectError:     false,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+				InitContainers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+			},
+		},
+		{
+			name:            "Pods with feature enabled, some containers setting HostProcess=true, and others setting HostProcess=false should not validate",
+			expectError:     true,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+				InitContainers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &falseVar,
+						},
+					},
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, some containers setting HostProcess=true, and other leaving HostProcess unset should not validate",
+			expectError:     true,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+				InitContainers: []core.Container{{
+					Name: containerName,
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, pod-wide HostProcess=true, some containers setting HostProcess=true, and init containers setting HostProcess=false should not validate",
+			expectError:     true,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &trueVar,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+				InitContainers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &falseVar,
+						},
+					},
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, pod-wide HostProcess=true, some containers setting HostProcess=true, and others setting HostProcess=false should not validate",
+			expectError:     true,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &trueVar,
+					},
+				},
+				Containers: []core.Container{
+					{
+						Name: containerName,
+						SecurityContext: &core.SecurityContext{
+							WindowsOptions: &core.WindowsSecurityContextOptions{
+								HostProcess: &trueVar,
+							},
+						},
+					}, {
+						Name: containerName,
+						SecurityContext: &core.SecurityContext{
+							WindowsOptions: &core.WindowsSecurityContextOptions{
+								HostProcess: &falseVar,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, pod-wide HostProcess=true, some containers setting HostProcess=true, and others leaving HostProcess=nil should validate",
+			expectError:     false,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &trueVar,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+				InitContainers: []core.Container{{
+					Name: containerName,
+				}},
+			},
+		},
+		{
+			name:            "Spec with feature enabled, pod-wide HostProcess=false, some contaienrs setting HostProccess=true should not validate",
+			expectError:     true,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &falseVar,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+				InitContainers: []core.Container{{
+					Name: containerName,
+				}},
+			},
+		},
+		{
+			name:            "Pod's HostProcess set to true but all containers override to false should not validate",
+			expectError:     true,
+			featureEnabled:  true,
+			allowPrivileged: true,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+					WindowsOptions: &core.WindowsSecurityContextOptions{
+						HostProcess: &trueVar,
+					},
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &falseVar,
+						},
+					},
+				}},
+			},
+		},
+		{
+			name:            "Valid HostProcess pod should spec should not validate if allowPrivileged is not set",
+			expectError:     true,
+			featureEnabled:  true,
+			allowPrivileged: false,
+			podSpec: &core.PodSpec{
+				SecurityContext: &core.PodSecurityContext{
+					HostNetwork: true,
+				},
+				Containers: []core.Container{{
+					Name: containerName,
+					SecurityContext: &core.SecurityContext{
+						WindowsOptions: &core.WindowsSecurityContextOptions{
+							HostProcess: &trueVar,
+						},
+					},
+				}},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WindowsHostProcessContainers, testCase.featureEnabled)()
+
+			opts := PodValidationOptions{AllowWindowsHostProcessField: testCase.featureEnabled}
+
+			capabilities.SetForTests(capabilities.Capabilities{
+				AllowPrivileged: testCase.allowPrivileged,
+			})
+
+			errs := validateWindowsHostProcessPod(testCase.podSpec, field.NewPath("spec"), opts)
+			if testCase.expectError && len(errs) == 0 {
+				t.Errorf("Unexpected success")
+			}
+			if !testCase.expectError && len(errs) != 0 {
+				t.Errorf("Unexpected error(s): %v", errs)
+			}
+		})
 	}
 }

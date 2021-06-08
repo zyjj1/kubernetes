@@ -68,7 +68,7 @@ type Interface interface {
 	Install(c *mux.PathRecorderMux)
 }
 
-// This request filter implements https://github.com/kubernetes/enhancements/blob/master/keps/sig-api-machinery/20190228-priority-and-fairness.md
+// This request filter implements https://github.com/kubernetes/enhancements/blob/master/keps/sig-api-machinery/1040-priority-and-fairness/README.md
 
 // New creates a new instance to implement API priority and fairness
 func New(
@@ -78,18 +78,43 @@ func New(
 	requestWaitLimit time.Duration,
 ) Interface {
 	grc := counter.NoOp{}
+	clk := clock.RealClock{}
 	return NewTestable(TestableConfig{
+		Name:                   "Controller",
+		Clock:                  clk,
+		AsFieldManager:         ConfigConsumerAsFieldManager,
+		FoundToDangling:        func(found bool) bool { return !found },
 		InformerFactory:        informerFactory,
 		FlowcontrolClient:      flowcontrolClient,
 		ServerConcurrencyLimit: serverConcurrencyLimit,
 		RequestWaitLimit:       requestWaitLimit,
 		ObsPairGenerator:       metrics.PriorityLevelConcurrencyObserverPairGenerator,
-		QueueSetFactory:        fqs.NewQueueSetFactory(&clock.RealClock{}, grc),
+		QueueSetFactory:        fqs.NewQueueSetFactory(clk, grc),
 	})
 }
 
 // TestableConfig carries the parameters to an implementation that is testable
 type TestableConfig struct {
+	// Name of the controller
+	Name string
+
+	// Clock to use in timing deliberate delays
+	Clock clock.PassiveClock
+
+	// AsFieldManager is the string to use in the metadata for
+	// server-side apply.  Normally this is
+	// `ConfigConsumerAsFieldManager`.  This is exposed as a parameter
+	// so that a test of competing controllers can supply different
+	// values.
+	AsFieldManager string
+
+	// FoundToDangling maps the boolean indicating whether a
+	// FlowSchema's referenced PLC exists to the boolean indicating
+	// that FlowSchema's status should indicate a dangling reference.
+	// This is a parameter so that we can write tests of what happens
+	// when servers disagree on that bit of Status.
+	FoundToDangling func(bool) bool
+
 	// InformerFactory to use in building the controller
 	InformerFactory kubeinformers.SharedInformerFactory
 
@@ -123,28 +148,35 @@ func (cfgCtlr *configController) Handle(ctx context.Context, requestDigest Reque
 	noteFn(fs, pl)
 	if req == nil {
 		if queued {
-			metrics.ObserveWaitingDuration(pl.Name, fs.Name, strconv.FormatBool(req != nil), time.Since(startWaitingTime))
+			metrics.ObserveWaitingDuration(ctx, pl.Name, fs.Name, strconv.FormatBool(req != nil), time.Since(startWaitingTime))
 		}
 		klog.V(7).Infof("Handle(%#+v) => fsName=%q, distMethod=%#+v, plName=%q, isExempt=%v, reject", requestDigest, fs.Name, fs.Spec.DistinguisherMethod, pl.Name, isExempt)
 		return
 	}
 	klog.V(7).Infof("Handle(%#+v) => fsName=%q, distMethod=%#+v, plName=%q, isExempt=%v, queued=%v", requestDigest, fs.Name, fs.Spec.DistinguisherMethod, pl.Name, isExempt, queued)
 	var executed bool
-	idle := req.Finish(func() {
-		if queued {
-			metrics.ObserveWaitingDuration(pl.Name, fs.Name, strconv.FormatBool(req != nil), time.Since(startWaitingTime))
+	idle, panicking := true, true
+	defer func() {
+		klog.V(7).Infof("Handle(%#+v) => fsName=%q, distMethod=%#+v, plName=%q, isExempt=%v, queued=%v, Finish() => panicking=%v idle=%v",
+			requestDigest, fs.Name, fs.Spec.DistinguisherMethod, pl.Name, isExempt, queued, panicking, idle)
+		if idle {
+			cfgCtlr.maybeReap(pl.Name)
 		}
-		metrics.AddDispatch(pl.Name, fs.Name)
+	}()
+	idle = req.Finish(func() {
+		if queued {
+			metrics.ObserveWaitingDuration(ctx, pl.Name, fs.Name, strconv.FormatBool(req != nil), time.Since(startWaitingTime))
+		}
+		metrics.AddDispatch(ctx, pl.Name, fs.Name)
 		executed = true
 		startExecutionTime := time.Now()
+		defer func() {
+			metrics.ObserveExecutionDuration(ctx, pl.Name, fs.Name, time.Since(startExecutionTime))
+		}()
 		execFn()
-		metrics.ObserveExecutionDuration(pl.Name, fs.Name, time.Since(startExecutionTime))
 	})
 	if queued && !executed {
-		metrics.ObserveWaitingDuration(pl.Name, fs.Name, strconv.FormatBool(req != nil), time.Since(startWaitingTime))
+		metrics.ObserveWaitingDuration(ctx, pl.Name, fs.Name, strconv.FormatBool(req != nil), time.Since(startWaitingTime))
 	}
-	klog.V(7).Infof("Handle(%#+v) => fsName=%q, distMethod=%#+v, plName=%q, isExempt=%v, queued=%v, Finish() => idle=%v", requestDigest, fs.Name, fs.Spec.DistinguisherMethod, pl.Name, isExempt, queued, idle)
-	if idle {
-		cfgCtlr.maybeReap(pl.Name)
-	}
+	panicking = false
 }

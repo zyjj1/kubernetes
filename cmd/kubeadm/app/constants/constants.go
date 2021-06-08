@@ -32,7 +32,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	bootstrapapi "k8s.io/cluster-bootstrap/token/api"
-	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	utilnet "k8s.io/utils/net"
 )
 
@@ -232,18 +231,22 @@ const (
 	// LabelNodeRoleControlPlane specifies that a node hosts control-plane components
 	LabelNodeRoleControlPlane = "node-role.kubernetes.io/control-plane"
 
+	// LabelExcludeFromExternalLB can be set on a node to exclude it from external load balancers.
+	// This is added to control plane nodes to preserve backwards compatibility with a legacy behavior.
+	LabelExcludeFromExternalLB = "node.kubernetes.io/exclude-from-external-load-balancers"
+
 	// AnnotationKubeadmCRISocket specifies the annotation kubeadm uses to preserve the crisocket information given to kubeadm at
 	// init/join time for use later. kubeadm annotates the node object with this information
 	AnnotationKubeadmCRISocket = "kubeadm.alpha.kubernetes.io/cri-socket"
+
+	// UnknownCRISocket defines the undetected or unknown CRI socket
+	UnknownCRISocket = "/var/run/unknown.sock"
 
 	// KubeadmConfigConfigMap specifies in what ConfigMap in the kube-system namespace the `kubeadm init` configuration should be stored
 	KubeadmConfigConfigMap = "kubeadm-config"
 
 	// ClusterConfigurationConfigMapKey specifies in what ConfigMap key the cluster configuration should be stored
 	ClusterConfigurationConfigMapKey = "ClusterConfiguration"
-
-	// ClusterStatusConfigMapKey specifies in what ConfigMap key the cluster status should be stored
-	ClusterStatusConfigMapKey = "ClusterStatus"
 
 	// KubeProxyConfigMap specifies in what ConfigMap in the kube-system namespace the kube-proxy configuration should be stored
 	KubeProxyConfigMap = "kube-proxy"
@@ -283,7 +286,7 @@ const (
 	MinExternalEtcdVersion = "3.2.18"
 
 	// DefaultEtcdVersion indicates the default etcd version that kubeadm uses
-	DefaultEtcdVersion = "3.4.13-0"
+	DefaultEtcdVersion = "3.4.13-3"
 
 	// Etcd defines variable used internally when referring to etcd component
 	Etcd = "etcd"
@@ -295,17 +298,10 @@ const (
 	KubeScheduler = "kube-scheduler"
 	// KubeProxy defines variable used internally when referring to kube-proxy component
 	KubeProxy = "kube-proxy"
-	// HyperKube defines variable used internally when referring to the hyperkube image
-	HyperKube = "hyperkube"
 	// CoreDNS defines variable used internally when referring to the CoreDNS component
 	CoreDNS = "CoreDNS"
-	// KubeDNS defines variable used internally when referring to the KubeDNS component
-	KubeDNS = "kube-dns"
 	// Kubelet defines variable used internally when referring to the Kubelet
 	Kubelet = "kubelet"
-
-	// SelfHostingPrefix describes the prefix workloads that are self-hosted by kubeadm has
-	SelfHostingPrefix = "self-hosted-"
 
 	// KubeCertificatesVolumeName specifies the name for the Volume that is used for injecting certificates to control plane components (can be both a hostPath volume or a projected, all-in-one volume)
 	KubeCertificatesVolumeName = "k8s-certs"
@@ -317,7 +313,7 @@ const (
 	NodeBootstrapTokenAuthGroup = "system:bootstrappers:kubeadm:default-node-token"
 
 	// DefaultCIImageRepository points to image registry where CI uploads images from ci-cross build job
-	DefaultCIImageRepository = "gcr.io/kubernetes-ci-images"
+	DefaultCIImageRepository = "gcr.io/k8s-staging-ci-images"
 
 	// CoreDNSConfigMap specifies in what ConfigMap in the kube-system namespace the CoreDNS config should be stored
 	CoreDNSConfigMap = "coredns"
@@ -328,26 +324,8 @@ const (
 	// CoreDNSImageName specifies the name of the image for CoreDNS add-on
 	CoreDNSImageName = "coredns"
 
-	// KubeDNSConfigMap specifies in what ConfigMap in the kube-system namespace the kube-dns config should be stored
-	KubeDNSConfigMap = "kube-dns"
-
-	// KubeDNSDeploymentName specifies the name of the Deployment for kube-dns add-on
-	KubeDNSDeploymentName = "kube-dns"
-
-	// KubeDNSKubeDNSImageName specifies the name of the image for the kubedns container in the kube-dns add-on
-	KubeDNSKubeDNSImageName = "k8s-dns-kube-dns"
-
-	// KubeDNSSidecarImageName specifies the name of the image for the sidecar container in the kube-dns add-on
-	KubeDNSSidecarImageName = "k8s-dns-sidecar"
-
-	// KubeDNSDnsMasqNannyImageName specifies the name of the image for the dnsmasq container in the kube-dns add-on
-	KubeDNSDnsMasqNannyImageName = "k8s-dns-dnsmasq-nanny"
-
-	// KubeDNSVersion is the version of kube-dns to be deployed if it is used
-	KubeDNSVersion = "1.14.13"
-
 	// CoreDNSVersion is the version of CoreDNS to be deployed if it is used
-	CoreDNSVersion = "1.7.0"
+	CoreDNSVersion = "v1.8.0"
 
 	// ClusterConfigurationKind is the string kind value for the ClusterConfiguration struct
 	ClusterConfigurationKind = "ClusterConfiguration"
@@ -414,6 +392,23 @@ const (
 	ModeRBAC string = "RBAC"
 	// ModeNode is an authorization mode that authorizes API requests made by kubelets.
 	ModeNode string = "Node"
+
+	// PauseVersion indicates the default pause image version for kubeadm
+	PauseVersion = "3.5"
+
+	// CgroupDriverSystemd holds the systemd driver type
+	CgroupDriverSystemd = "systemd"
+
+	// The username of the user that kube-controller-manager runs as.
+	KubeControllerManagerUserName string = "kubeadm-kcm"
+	// The username of the user that kube-apiserver runs as.
+	KubeAPIServerUserName string = "kubeadm-kas"
+	// The username of the user that kube-scheduler runs as.
+	KubeSchedulerUserName string = "kubeadm-ks"
+	// The username of the user that etcd runs as.
+	EtcdUserName string = "kubeadm-etcd"
+	// The group of users that are allowed to read the service account private key.
+	ServiceAccountKeyReadersGroupName string = "kubeadm-sa-key-readers"
 )
 
 var (
@@ -453,13 +448,13 @@ var (
 	ControlPlaneComponents = []string{KubeAPIServer, KubeControllerManager, KubeScheduler}
 
 	// MinimumControlPlaneVersion specifies the minimum control plane version kubeadm can deploy
-	MinimumControlPlaneVersion = version.MustParseSemantic("v1.19.0")
+	MinimumControlPlaneVersion = version.MustParseSemantic("v1.21.0")
 
 	// MinimumKubeletVersion specifies the minimum version of kubelet which kubeadm supports
-	MinimumKubeletVersion = version.MustParseSemantic("v1.19.0")
+	MinimumKubeletVersion = version.MustParseSemantic("v1.21.0")
 
 	// CurrentKubernetesVersion specifies current Kubernetes version supported by kubeadm
-	CurrentKubernetesVersion = version.MustParseSemantic("v1.20.0")
+	CurrentKubernetesVersion = version.MustParseSemantic("v1.22.0")
 
 	// SupportedEtcdVersion lists officially supported etcd versions with corresponding Kubernetes releases
 	SupportedEtcdVersion = map[uint8]string{
@@ -472,6 +467,8 @@ var (
 		19: "3.4.13-0",
 		20: "3.4.13-0",
 		21: "3.4.13-0",
+		22: "3.4.13-3",
+		23: "3.4.13-3",
 	}
 
 	// KubeadmCertsClusterRoleName sets the name for the ClusterRole that allows
@@ -553,11 +550,6 @@ func GetBootstrapKubeletKubeConfigPath() string {
 // GetKubeletKubeConfigPath returns the location on the disk where kubelet kubeconfig is located by default
 func GetKubeletKubeConfigPath() string {
 	return filepath.Join(KubernetesDir, KubeletKubeConfigFileName)
-}
-
-// AddSelfHostedPrefix adds the self-hosted- prefix to the component name
-func AddSelfHostedPrefix(componentName string) string {
-	return fmt.Sprintf("%s%s", SelfHostingPrefix, componentName)
 }
 
 // CreateTempDirForKubeadm is a function that creates a temporary directory under /etc/kubernetes/tmp (not using /tmp as that would potentially be dangerous)
@@ -651,16 +643,6 @@ func GetAPIServerVirtualIP(svcSubnetList string, isDualStack bool) (net.IP, erro
 		return nil, errors.Wrapf(err, "unable to get the first IP address from the given CIDR: %s", svcSubnet.String())
 	}
 	return internalAPIServerVirtualIP, nil
-}
-
-// GetDNSVersion is a handy function that returns the DNS version by DNS type
-func GetDNSVersion(dnsType kubeadmapi.DNSAddOnType) string {
-	switch dnsType {
-	case kubeadmapi.KubeDNS:
-		return KubeDNSVersion
-	default:
-		return CoreDNSVersion
-	}
 }
 
 // GetKubeletConfigMapName returns the right ConfigMap name for the right branch of k8s

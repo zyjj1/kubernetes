@@ -21,6 +21,7 @@ import (
 
 	"github.com/lithammer/dedent"
 	"github.com/spf13/cobra"
+
 	"k8s.io/kubernetes/cmd/kubeadm/app/cmd/alpha"
 	"k8s.io/kubernetes/cmd/kubeadm/app/cmd/options"
 	"k8s.io/kubernetes/cmd/kubeadm/app/cmd/upgrade"
@@ -81,6 +82,7 @@ func NewKubeadmCommand(in io.Reader, out, err io.Writer) *cobra.Command {
 
 	cmds.ResetFlags()
 
+	cmds.AddCommand(newCmdCertsUtility(out))
 	cmds.AddCommand(newCmdCompletion(out, ""))
 	cmds.AddCommand(newCmdConfig(out))
 	cmds.AddCommand(newCmdInit(out, nil))
@@ -89,12 +91,9 @@ func NewKubeadmCommand(in io.Reader, out, err io.Writer) *cobra.Command {
 	cmds.AddCommand(newCmdVersion(out))
 	cmds.AddCommand(newCmdToken(out, err))
 	cmds.AddCommand(upgrade.NewCmdUpgrade(out))
-	cmds.AddCommand(alpha.NewCmdAlpha(in, out))
+	cmds.AddCommand(alpha.NewCmdAlpha())
 	options.AddKubeadmOtherFlags(cmds.PersistentFlags(), &rootfsPath)
-
-	// TODO: remove "certs" from "alpha"
-	// https://github.com/kubernetes/kubeadm/issues/2291
-	cmds.AddCommand(alpha.NewCmdCertsUtility(out))
+	cmds.AddCommand(newCmdKubeConfigUtility(out))
 
 	return cmds
 }

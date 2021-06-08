@@ -292,14 +292,14 @@ Examples:
 
 ```console
 docker run -i \
-  k8s.gcr.io/e2e-test-images/agnhost:2.14 \
+  k8s.gcr.io/e2e-test-images/agnhost:2.29 \
   logs-generator --log-lines-total 10 --run-duration 1s
 ```
 
 ```console
 kubectl run logs-generator \
   --generator=run-pod/v1 \
-  --image=k8s.gcr.io/e2e-test-images/agnhost:2.14 \
+  --image=k8s.gcr.io/e2e-test-images/agnhost:2.29 \
   --restart=Never \
   -- logs-generator -t 10 -d 1s
 ```
@@ -531,7 +531,7 @@ Usage:
 ```console
     kubectl run test-agnhost \
       --generator=run-pod/v1 \
-      --image=k8s.gcr.io/e2e-test-images/agnhost:2.14 \
+      --image=k8s.gcr.io/e2e-test-images/agnhost:2.21 \
       --restart=Never \
       --env "BIND_ADDRESS=localhost" \
       --env "BIND_PORT=8080" \
@@ -651,6 +651,6 @@ The Windows `agnhost` image includes a `nc` binary that is 100% compliant with i
 
 ## Image
 
-The image can be found at `k8s.gcr.io/e2e-test-images/agnhost:2.14` for both Linux and
+The image can be found at `k8s.gcr.io/e2e-test-images/agnhost:2.21` for both Linux and
 Windows containers (based on `mcr.microsoft.com/windows/servercore:ltsc2019`,
 `mcr.microsoft.com/windows/servercore:1903`, and `mcr.microsoft.com/windows/servercore:1909`).

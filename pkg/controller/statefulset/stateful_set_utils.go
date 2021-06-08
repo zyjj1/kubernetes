@@ -286,12 +286,15 @@ func Match(ss *apps.StatefulSet, history *apps.ControllerRevision) (bool, error)
 // PodSpecTemplate. We can modify this later to encompass more state (or less) and remain compatible with previously
 // recorded patches.
 func getPatch(set *apps.StatefulSet) ([]byte, error) {
-	str, err := runtime.Encode(patchCodec, set)
+	data, err := runtime.Encode(patchCodec, set)
 	if err != nil {
 		return nil, err
 	}
 	var raw map[string]interface{}
-	json.Unmarshal([]byte(str), &raw)
+	err = json.Unmarshal(data, &raw)
+	if err != nil {
+		return nil, err
+	}
 	objCopy := make(map[string]interface{})
 	specCopy := make(map[string]interface{})
 	spec := raw["spec"].(map[string]interface{})

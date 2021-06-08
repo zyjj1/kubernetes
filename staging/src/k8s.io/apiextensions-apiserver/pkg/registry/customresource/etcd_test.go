@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/diff"
+	"k8s.io/apiserver/pkg/endpoints/handlers/fieldmanager"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	registrytest "k8s.io/apiserver/pkg/registry/generic/testing"
@@ -55,7 +56,6 @@ func newStorage(t *testing.T) (customresource.CustomResourceStorage, *etcd3testi
 	parameterScheme := runtime.NewScheme()
 	parameterScheme.AddUnversionedTypes(schema.GroupVersion{Group: "mygroup.example.com", Version: "v1beta1"},
 		&metav1.ListOptions{},
-		&metav1.ExportOptions{},
 		&metav1.GetOptions{},
 		&metav1.DeleteOptions{},
 	)
@@ -107,6 +107,7 @@ func newStorage(t *testing.T) (customresource.CustomResourceStorage, *etcd3testi
 		restOptions,
 		[]string{"all"},
 		table,
+		fieldmanager.ResourcePathMappings{},
 	)
 
 	return storage, server

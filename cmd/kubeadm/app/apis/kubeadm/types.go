@@ -57,6 +57,11 @@ type InitConfiguration struct {
 	// CertificateKey sets the key with which certificates and keys are encrypted prior to being uploaded in
 	// a secret in the cluster during the uploadcerts init phase.
 	CertificateKey string
+
+	// SkipPhases is a list of phases to skip during command execution.
+	// The list of phases can be obtained with the "kubeadm init --help" command.
+	// The flag "--skip-phases" takes precedence over this field.
+	SkipPhases []string
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -107,7 +112,7 @@ type ClusterConfiguration struct {
 
 	// ImageRepository sets the container registry to pull images from.
 	// If empty, `k8s.gcr.io` will be used by default; in case of kubernetes version is a CI build (kubernetes version starts with `ci/` or `ci-cross/`)
-	// `gcr.io/kubernetes-ci-images` will be used as a default for control plane components and for kube-proxy, while `k8s.gcr.io`
+	// `gcr.io/k8s-staging-ci-images` will be used as a default for control plane components and for kube-proxy, while `k8s.gcr.io`
 	// will be used for all the other images.
 	ImageRepository string
 
@@ -115,11 +120,6 @@ type ClusterConfiguration struct {
 	// Useful for running kubeadm with images from CI builds.
 	// +k8s:conversion-gen=false
 	CIImageRepository string
-
-	// UseHyperKubeImage controls if hyperkube should be used for Kubernetes components instead of their respective separate images
-	// DEPRECATED: As hyperkube is itself deprecated, this fields is too. It will be removed in future kubeadm config versions, kubeadm
-	// will print multiple warnings when set to true, and at some point it may become ignored.
-	UseHyperKubeImage bool
 
 	// FeatureGates enabled by the user.
 	FeatureGates map[string]bool
@@ -151,19 +151,19 @@ type APIServer struct {
 }
 
 // DNSAddOnType defines string identifying DNS add-on types
+// TODO: Remove with v1beta2 https://github.com/kubernetes/kubeadm/issues/2459
 type DNSAddOnType string
 
 const (
 	// CoreDNS add-on type
+	// TODO: Remove with v1beta2 https://github.com/kubernetes/kubeadm/issues/2459
 	CoreDNS DNSAddOnType = "CoreDNS"
-
-	// KubeDNS add-on type
-	KubeDNS DNSAddOnType = "kube-dns"
 )
 
 // DNS defines the DNS addon that should be used in the cluster
 type DNS struct {
 	// Type defines the DNS add-on to be used
+	// TODO: Used only in validation over the internal type. Remove with v1beta2 https://github.com/kubernetes/kubeadm/issues/2459
 	Type DNSAddOnType
 
 	// ImageMeta allows to customize the image used for the DNS component
@@ -182,18 +182,6 @@ type ImageMeta struct {
 	ImageTag string
 
 	//TODO: evaluate if we need also a ImageName based on user feedbacks
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-// ClusterStatus contains the cluster status. The ClusterStatus will be stored in the kubeadm-config
-// ConfigMap in the cluster, and then updated by kubeadm when additional control plane instance joins or leaves the cluster.
-type ClusterStatus struct {
-	metav1.TypeMeta
-
-	// APIEndpoints currently available in the cluster, one for each control plane/api server instance.
-	// The key of the map is the IP of the host's default interface
-	APIEndpoints map[string]APIEndpoint
 }
 
 // APIEndpoint struct contains elements of API server instance deployed on a node.
@@ -330,6 +318,11 @@ type JoinConfiguration struct {
 	// ControlPlane defines the additional control plane instance to be deployed on the joining node.
 	// If nil, no additional control plane instance will be deployed.
 	ControlPlane *JoinControlPlane
+
+	// SkipPhases is a list of phases to skip during command execution.
+	// The list of phases can be obtained with the "kubeadm join --help" command.
+	// The flag "--skip-phases" takes precedence over this field.
+	SkipPhases []string
 }
 
 // JoinControlPlane contains elements describing an additional control plane instance to be deployed on the joining node.
@@ -451,6 +444,12 @@ type ComponentConfig interface {
 
 	// SetUserSupplied sets the state of the component config "user supplied" flag to, either true, or false.
 	SetUserSupplied(userSupplied bool)
+
+	// Set can be used to set the internal configuration in the ComponentConfig
+	Set(interface{})
+
+	// Get can be used to get the internal configuration in the ComponentConfig
+	Get() interface{}
 }
 
 // ComponentConfigMap is a map between a group name (as in GVK group) and a ComponentConfig

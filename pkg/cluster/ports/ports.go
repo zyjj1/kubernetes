@@ -17,7 +17,7 @@ limitations under the License.
 package ports
 
 // In this file, we can see all default port of cluster.
-// It's also a important documentation for us. So don't remove them easily.
+// It's also an important documentation for us. So don't remove them easily.
 const (
 	// ProxyStatusPort is the default port for the proxy metrics server.
 	// May be overridden by a flag at startup.
@@ -25,10 +25,6 @@ const (
 	// KubeletPort is the default port for the kubelet server on each host machine.
 	// May be overridden by a flag at startup.
 	KubeletPort = 10250
-	// InsecureKubeControllerManagerPort is the default port for the controller manager status server.
-	// May be overridden by a flag at startup.
-	// Deprecated: use the secure KubeControllerManagerPort instead.
-	InsecureKubeControllerManagerPort = 10252
 	// KubeletReadOnlyPort exposes basic read-only services from the kubelet.
 	// May be overridden by a flag at startup.
 	// This is necessary for heapster to collect monitoring stats from the kubelet

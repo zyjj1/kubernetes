@@ -17,6 +17,8 @@ limitations under the License.
 package validation
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -112,9 +114,9 @@ func TestValidateDefaultPreemptionArgs(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := ValidateDefaultPreemptionArgs(tc.args)
+			err := ValidateDefaultPreemptionArgs(nil, &tc.args)
 			if diff := cmp.Diff(tc.wantErrs.ToAggregate(), err, ignoreBadValueDetail); diff != "" {
-				t.Fatalf("ValidateDefaultPreemptionArgs returned err (-want,+got):\n%s", diff)
+				t.Errorf("ValidateDefaultPreemptionArgs returned err (-want,+got):\n%s", diff)
 			}
 		})
 	}
@@ -152,9 +154,9 @@ func TestValidateInterPodAffinityArgs(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := ValidateInterPodAffinityArgs(tc.args)
+			err := ValidateInterPodAffinityArgs(nil, &tc.args)
 			if diff := cmp.Diff(tc.wantErr, err, ignoreBadValueDetail); diff != "" {
-				t.Fatalf("ValidateInterPodAffinityArgs returned err (-want,+got):\n%s", diff)
+				t.Errorf("ValidateInterPodAffinityArgs returned err (-want,+got):\n%s", diff)
 			}
 		})
 	}
@@ -233,9 +235,9 @@ func TestValidateNodeLabelArgs(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := ValidateNodeLabelArgs(tc.args)
+			err := ValidateNodeLabelArgs(nil, &tc.args)
 			if diff := cmp.Diff(tc.wantErrs.ToAggregate(), err, ignoreBadValueDetail); diff != "" {
-				t.Fatalf("ValidateNodeLabelArgs returned err (-want,+got):\n%s", diff)
+				t.Errorf("ValidateNodeLabelArgs returned err (-want,+got):\n%s", diff)
 			}
 		})
 	}
@@ -424,9 +426,9 @@ func TestValidatePodTopologySpreadArgs(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := ValidatePodTopologySpreadArgs(tc.args)
+			err := ValidatePodTopologySpreadArgs(nil, tc.args)
 			if diff := cmp.Diff(tc.wantErrs.ToAggregate(), err, ignoreBadValueDetail); diff != "" {
-				t.Fatalf("ValidatePodTopologySpreadArgs returned err (-want,+got):\n%s", diff)
+				t.Errorf("ValidatePodTopologySpreadArgs returned err (-want,+got):\n%s", diff)
 			}
 		})
 	}
@@ -666,9 +668,9 @@ func TestValidateRequestedToCapacityRatioArgs(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := ValidateRequestedToCapacityRatioArgs(tc.args)
+			err := ValidateRequestedToCapacityRatioArgs(nil, &tc.args)
 			if diff := cmp.Diff(tc.wantErrs.ToAggregate(), err, ignoreBadValueDetail); diff != "" {
-				t.Fatalf("ValidateRequestedToCapacityRatioArgs returned err (-want,+got):\n%s", diff)
+				t.Errorf("ValidateRequestedToCapacityRatioArgs returned err (-want,+got):\n%s", diff)
 			}
 		})
 	}
@@ -753,9 +755,9 @@ func TestValidateNodeResourcesLeastAllocatedArgs(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := ValidateNodeResourcesLeastAllocatedArgs(tc.args)
+			err := ValidateNodeResourcesLeastAllocatedArgs(nil, tc.args)
 			if diff := cmp.Diff(tc.wantErrs.ToAggregate(), err, ignoreBadValueDetail); diff != "" {
-				t.Fatalf("ValidateNodeResourcesLeastAllocatedArgs returned err (-want,+got):\n%s", diff)
+				t.Errorf("ValidateNodeResourcesLeastAllocatedArgs returned err (-want,+got):\n%s", diff)
 			}
 		})
 	}
@@ -840,9 +842,9 @@ func TestValidateNodeResourcesMostAllocatedArgs(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := ValidateNodeResourcesMostAllocatedArgs(tc.args)
+			err := ValidateNodeResourcesMostAllocatedArgs(nil, tc.args)
 			if diff := cmp.Diff(tc.wantErrs.ToAggregate(), err, ignoreBadValueDetail); diff != "" {
-				t.Fatalf("ValidateNodeResourcesLeastAllocatedArgs returned err (-want,+got):\n%s", diff)
+				t.Errorf("ValidateNodeResourcesLeastAllocatedArgs returned err (-want,+got):\n%s", diff)
 			}
 		})
 	}
@@ -927,7 +929,7 @@ func TestValidateNodeAffinityArgs(t *testing.T) {
 			wantErr: field.ErrorList{
 				&field.Error{
 					Type:  field.ErrorTypeInvalid,
-					Field: "addedAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0]",
+					Field: "addedAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key",
 				},
 				&field.Error{
 					Type:  field.ErrorTypeInvalid,
@@ -938,9 +940,119 @@ func TestValidateNodeAffinityArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateNodeAffinityArgs(&tc.args)
+			err := ValidateNodeAffinityArgs(nil, &tc.args)
 			if diff := cmp.Diff(tc.wantErr, err, ignoreBadValueDetail); diff != "" {
-				t.Fatalf("ValidatedNodeAffinityArgs returned err (-want,+got):\n%s", diff)
+				t.Errorf("ValidatedNodeAffinityArgs returned err (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestValidateVolumeBindingArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    config.VolumeBindingArgs
+		wantErr error
+	}{
+		{
+			name: "zero is a valid config",
+			args: config.VolumeBindingArgs{
+				BindTimeoutSeconds: 0,
+			},
+		},
+		{
+			name: "positive value is valid config",
+			args: config.VolumeBindingArgs{
+				BindTimeoutSeconds: 10,
+			},
+		},
+		{
+			name: "negative value is invalid config ",
+			args: config.VolumeBindingArgs{
+				BindTimeoutSeconds: -10,
+			},
+			wantErr: &field.Error{
+				Type:  field.ErrorTypeInvalid,
+				Field: "bindTimeoutSeconds",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateVolumeBindingArgs(nil, &tc.args)
+			if diff := cmp.Diff(tc.wantErr, err, ignoreBadValueDetail); diff != "" {
+				t.Errorf("ValidateVolumeBindingArgs returned err (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestValidateFitArgs(t *testing.T) {
+	argsTest := []struct {
+		name   string
+		args   config.NodeResourcesFitArgs
+		expect string
+	}{
+		{
+			name: "IgnoredResources: too long value",
+			args: config.NodeResourcesFitArgs{
+				IgnoredResources: []string{fmt.Sprintf("longvalue%s", strings.Repeat("a", 64))},
+			},
+			expect: "name part must be no more than 63 characters",
+		},
+		{
+			name: "IgnoredResources: name is empty",
+			args: config.NodeResourcesFitArgs{
+				IgnoredResources: []string{"example.com/"},
+			},
+			expect: "name part must be non-empty",
+		},
+		{
+			name: "IgnoredResources: name has too many slash",
+			args: config.NodeResourcesFitArgs{
+				IgnoredResources: []string{"example.com/aaa/bbb"},
+			},
+			expect: "a qualified name must consist of alphanumeric characters",
+		},
+		{
+			name: "IgnoredResources: valid args",
+			args: config.NodeResourcesFitArgs{
+				IgnoredResources: []string{"example.com"},
+			},
+		},
+		{
+			name: "IgnoredResourceGroups: valid args ",
+			args: config.NodeResourcesFitArgs{
+				IgnoredResourceGroups: []string{"example.com"},
+			},
+		},
+		{
+			name: "IgnoredResourceGroups: illegal args",
+			args: config.NodeResourcesFitArgs{
+				IgnoredResourceGroups: []string{"example.com/"},
+			},
+			expect: "name part must be non-empty",
+		},
+		{
+			name: "IgnoredResourceGroups: name is too long",
+			args: config.NodeResourcesFitArgs{
+				IgnoredResourceGroups: []string{strings.Repeat("a", 64)},
+			},
+			expect: "name part must be no more than 63 characters",
+		},
+		{
+			name: "IgnoredResourceGroups: name cannot be contain slash",
+			args: config.NodeResourcesFitArgs{
+				IgnoredResourceGroups: []string{"example.com/aa"},
+			},
+			expect: "resource group name can't contain '/'",
+		},
+	}
+
+	for _, test := range argsTest {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateNodeResourcesFitArgs(nil, &test.args); err != nil && !strings.Contains(err.Error(), test.expect) {
+				t.Errorf("case[%v]: error details do not include %v", test.name, err)
 			}
 		})
 	}

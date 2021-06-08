@@ -33,6 +33,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/certificates"
 	"k8s.io/kubernetes/pkg/apis/certificates/validation"
+	"sigs.k8s.io/structured-merge-diff/v4/fieldpath"
 )
 
 // csrStrategy implements behavior for CSRs
@@ -48,6 +49,23 @@ var Strategy = csrStrategy{legacyscheme.Scheme, names.SimpleNameGenerator}
 // NamespaceScoped is false for CSRs.
 func (csrStrategy) NamespaceScoped() bool {
 	return false
+}
+
+// GetResetFields returns the set of fields that get reset by the strategy
+// and should not be modified by the user.
+func (csrStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldpath.Set {
+	fields := map[fieldpath.APIVersion]*fieldpath.Set{
+		"certificates.k8s.io/v1": fieldpath.NewSet(
+			fieldpath.MakePathOrDie("spec"),
+			fieldpath.MakePathOrDie("status"),
+		),
+		"certificates.k8s.io/v1beta1": fieldpath.NewSet(
+			fieldpath.MakePathOrDie("spec"),
+			fieldpath.MakePathOrDie("status"),
+		),
+	}
+
+	return fields
 }
 
 // AllowCreateOnUpdate is false for CSRs.
@@ -99,6 +117,9 @@ func (csrStrategy) Validate(ctx context.Context, obj runtime.Object) field.Error
 	return validation.ValidateCertificateSigningRequestCreate(csr, requestGroupVersion(ctx))
 }
 
+// WarningsOnCreate returns warnings for the creation of the given object.
+func (csrStrategy) WarningsOnCreate(ctx context.Context, obj runtime.Object) []string { return nil }
+
 // Canonicalize normalizes the object after validation (which includes a signature check).
 func (csrStrategy) Canonicalize(obj runtime.Object) {}
 
@@ -107,6 +128,11 @@ func (csrStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) 
 	oldCSR := old.(*certificates.CertificateSigningRequest)
 	newCSR := obj.(*certificates.CertificateSigningRequest)
 	return validation.ValidateCertificateSigningRequestUpdate(newCSR, oldCSR, requestGroupVersion(ctx))
+}
+
+// WarningsOnUpdate returns warnings for the given update.
+func (csrStrategy) WarningsOnUpdate(ctx context.Context, obj, old runtime.Object) []string {
+	return nil
 }
 
 // If AllowUnconditionalUpdate() is true and the object specified by
@@ -118,27 +144,29 @@ func (csrStrategy) AllowUnconditionalUpdate() bool {
 	return true
 }
 
-func (s csrStrategy) Export(ctx context.Context, obj runtime.Object, exact bool) error {
-	csr, ok := obj.(*certificates.CertificateSigningRequest)
-	if !ok {
-		// unexpected programmer error
-		return fmt.Errorf("unexpected object: %v", obj)
-	}
-	s.PrepareForCreate(ctx, obj)
-	if exact {
-		return nil
-	}
-	// CSRs allow direct subresource edits, we clear them without exact so the CSR value can be reused.
-	csr.Status = certificates.CertificateSigningRequestStatus{}
-	return nil
-}
-
 // Storage strategy for the Status subresource
 type csrStatusStrategy struct {
 	csrStrategy
 }
 
 var StatusStrategy = csrStatusStrategy{Strategy}
+
+// GetResetFields returns the set of fields that get reset by the strategy
+// and should not be modified by the user.
+func (csrStatusStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldpath.Set {
+	fields := map[fieldpath.APIVersion]*fieldpath.Set{
+		"certificates.k8s.io/v1": fieldpath.NewSet(
+			fieldpath.MakePathOrDie("spec"),
+			fieldpath.MakePathOrDie("status", "conditions"),
+		),
+		"certificates.k8s.io/v1beta1": fieldpath.NewSet(
+			fieldpath.MakePathOrDie("spec"),
+			fieldpath.MakePathOrDie("status", "conditions"),
+		),
+	}
+
+	return fields
+}
 
 func (csrStatusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
 	newCSR := obj.(*certificates.CertificateSigningRequest)
@@ -224,6 +252,11 @@ func (csrStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Ob
 	return validation.ValidateCertificateSigningRequestStatusUpdate(obj.(*certificates.CertificateSigningRequest), old.(*certificates.CertificateSigningRequest), requestGroupVersion(ctx))
 }
 
+// WarningsOnUpdate returns warnings for the given update.
+func (csrStatusStrategy) WarningsOnUpdate(ctx context.Context, obj, old runtime.Object) []string {
+	return nil
+}
+
 // Canonicalize normalizes the object after validation.
 func (csrStatusStrategy) Canonicalize(obj runtime.Object) {
 }
@@ -234,6 +267,23 @@ type csrApprovalStrategy struct {
 }
 
 var ApprovalStrategy = csrApprovalStrategy{Strategy}
+
+// GetResetFields returns the set of fields that get reset by the strategy
+// and should not be modified by the user.
+func (csrApprovalStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldpath.Set {
+	fields := map[fieldpath.APIVersion]*fieldpath.Set{
+		"certificates.k8s.io/v1": fieldpath.NewSet(
+			fieldpath.MakePathOrDie("spec"),
+			fieldpath.MakePathOrDie("status", "certificate"),
+		),
+		"certificates.k8s.io/v1beta1": fieldpath.NewSet(
+			fieldpath.MakePathOrDie("spec"),
+			fieldpath.MakePathOrDie("status", "certificate"),
+		),
+	}
+
+	return fields
+}
 
 // PrepareForUpdate prepares the new certificate signing request by limiting
 // the data that is updated to only the conditions and populating condition timestamps
@@ -252,6 +302,11 @@ func (csrApprovalStrategy) PrepareForUpdate(ctx context.Context, obj, old runtim
 
 func (csrApprovalStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
 	return validation.ValidateCertificateSigningRequestApprovalUpdate(obj.(*certificates.CertificateSigningRequest), old.(*certificates.CertificateSigningRequest), requestGroupVersion(ctx))
+}
+
+// WarningsOnUpdate returns warnings for the given update.
+func (csrApprovalStrategy) WarningsOnUpdate(ctx context.Context, obj, old runtime.Object) []string {
+	return nil
 }
 
 // GetAttrs returns labels and fields of a given object for filtering purposes.

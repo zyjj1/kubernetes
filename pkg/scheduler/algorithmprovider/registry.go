@@ -17,8 +17,6 @@ limitations under the License.
 package algorithmprovider
 
 import (
-	"fmt"
-
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/features"
@@ -43,48 +41,24 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumezone"
 )
 
-// ClusterAutoscalerProvider defines the default autoscaler provider
-const ClusterAutoscalerProvider = "ClusterAutoscalerProvider"
-
-// Registry is a collection of all available algorithm providers.
-type Registry map[string]*schedulerapi.Plugins
-
-// NewRegistry returns an algorithm provider registry instance.
-func NewRegistry() Registry {
-	defaultConfig := getDefaultConfig()
-	applyFeatureGates(defaultConfig)
-
-	caConfig := getClusterAutoscalerConfig()
-	applyFeatureGates(caConfig)
-
-	return Registry{
-		schedulerapi.SchedulerDefaultProviderName: defaultConfig,
-		ClusterAutoscalerProvider:                 caConfig,
-	}
-}
-
-// ListAlgorithmProviders lists registered algorithm providers.
-func ListAlgorithmProviders() string {
-	return fmt.Sprintf("%s | %s", ClusterAutoscalerProvider, schedulerapi.SchedulerDefaultProviderName)
-}
-
-func getDefaultConfig() *schedulerapi.Plugins {
-	return &schedulerapi.Plugins{
-		QueueSort: &schedulerapi.PluginSet{
+func GetDefaultConfig() *schedulerapi.Plugins {
+	plugins := &schedulerapi.Plugins{
+		QueueSort: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: queuesort.Name},
 			},
 		},
-		PreFilter: &schedulerapi.PluginSet{
+		PreFilter: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: noderesources.FitName},
 				{Name: nodeports.Name},
 				{Name: podtopologyspread.Name},
 				{Name: interpodaffinity.Name},
 				{Name: volumebinding.Name},
+				{Name: nodeaffinity.Name},
 			},
 		},
-		Filter: &schedulerapi.PluginSet{
+		Filter: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: nodeunschedulable.Name},
 				{Name: nodename.Name},
@@ -103,12 +77,12 @@ func getDefaultConfig() *schedulerapi.Plugins {
 				{Name: interpodaffinity.Name},
 			},
 		},
-		PostFilter: &schedulerapi.PluginSet{
+		PostFilter: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: defaultpreemption.Name},
 			},
 		},
-		PreScore: &schedulerapi.PluginSet{
+		PreScore: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: interpodaffinity.Name},
 				{Name: podtopologyspread.Name},
@@ -116,7 +90,7 @@ func getDefaultConfig() *schedulerapi.Plugins {
 				{Name: nodeaffinity.Name},
 			},
 		},
-		Score: &schedulerapi.PluginSet{
+		Score: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: noderesources.BalancedAllocationName, Weight: 1},
 				{Name: imagelocality.Name, Weight: 1},
@@ -131,36 +105,33 @@ func getDefaultConfig() *schedulerapi.Plugins {
 				{Name: tainttoleration.Name, Weight: 1},
 			},
 		},
-		Reserve: &schedulerapi.PluginSet{
+		Reserve: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: volumebinding.Name},
 			},
 		},
-		PreBind: &schedulerapi.PluginSet{
+		PreBind: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: volumebinding.Name},
 			},
 		},
-		Bind: &schedulerapi.PluginSet{
+		Bind: schedulerapi.PluginSet{
 			Enabled: []schedulerapi.Plugin{
 				{Name: defaultbinder.Name},
 			},
 		},
 	}
-}
 
-func getClusterAutoscalerConfig() *schedulerapi.Plugins {
-	caConfig := getDefaultConfig()
-	// Replace least with most requested.
-	for i := range caConfig.Score.Enabled {
-		if caConfig.Score.Enabled[i].Name == noderesources.LeastAllocatedName {
-			caConfig.Score.Enabled[i].Name = noderesources.MostAllocatedName
-		}
-	}
-	return caConfig
+	applyFeatureGates(plugins)
+
+	return plugins
 }
 
 func applyFeatureGates(config *schedulerapi.Plugins) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.VolumeCapacityPriority) {
+		config.Score.Enabled = append(config.Score.Enabled, schedulerapi.Plugin{Name: volumebinding.Name, Weight: 1})
+	}
+
 	if !utilfeature.DefaultFeatureGate.Enabled(features.DefaultPodTopologySpread) {
 		// When feature is enabled, the default spreading is done by
 		// PodTopologySpread plugin, which is enabled by default.
