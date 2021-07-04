@@ -79,6 +79,8 @@ func getControlPlanePreparePhaseFlags(name string) []string {
 			options.TokenStr,
 			options.CertificateKey,
 			options.Patches,
+			// TODO: https://github.com/kubernetes/kubeadm/issues/2046 remove in 1.23
+			options.ExperimentalPatches,
 		}
 	case "download-certs":
 		flags = []string{
@@ -124,6 +126,8 @@ func getControlPlanePreparePhaseFlags(name string) []string {
 			options.CfgPath,
 			options.ControlPlane,
 			options.Patches,
+			// TODO: https://github.com/kubernetes/kubeadm/issues/2046 remove in 1.23
+			options.ExperimentalPatches,
 		}
 	default:
 		flags = []string{}
@@ -192,6 +196,9 @@ func runControlPlanePrepareControlPlaneSubphase(c workflow.RunData) error {
 			data.PatchesDir(),
 			&cfg.ClusterConfiguration,
 			&cfg.LocalAPIEndpoint,
+			// TODO: add support for join dry-run:
+			// https://github.com/kubernetes/kubeadm/issues/2505
+			false,
 			component,
 		)
 		if err != nil {

@@ -46,7 +46,10 @@ import (
 	"time"
 
 	"github.com/onsi/ginkgo"
+	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -143,6 +146,7 @@ func InitHostPathCSIDriver() storageframework.TestDriver {
 		storageframework.CapBlock:               true,
 		storageframework.CapPVCDataSource:       true,
 		storageframework.CapControllerExpansion: true,
+		storageframework.CapOnlineExpansion:     true,
 		storageframework.CapSingleNodeVolume:    true,
 
 		// This is needed for the
@@ -231,6 +235,9 @@ func (h *hostpathCSIDriver) PrepareTest(f *framework.Framework) (*storageframewo
 			// testsuites/volumelimits.go `should support volume limits`
 			// test.
 			"--maxvolumespernode=10",
+			// Enable volume lifecycle checks, to report failure if
+			// the volume is not unpublished / unstaged correctly.
+			"--check-volume-lifecycle=true",
 		},
 		ProvisionerContainerName: "csi-provisioner",
 		SnapshotterContainerName: "csi-snapshotter",
@@ -241,16 +248,19 @@ func (h *hostpathCSIDriver) PrepareTest(f *framework.Framework) (*storageframewo
 			return err
 		}
 
-		// Remove csi-external-health-monitor-agent because it is
-		// obsolete and shouldn't have been deployed by csi-driver-host-path v1.7.2.
-		// This can be removed when updating to a newer driver that
-		// doesn't deploy the agent.
+		// Remove csi-external-health-monitor-agent and
+		// csi-external-health-monitor-controller
+		// containers. The agent is obsolete.
+		// The controller is not needed for any of the
+		// tests and is causing too much overhead when
+		// running in a large cluster (see
+		// https://github.com/kubernetes/kubernetes/issues/102452#issuecomment-856991009).
 		switch item := item.(type) {
 		case *appsv1.StatefulSet:
 			var containers []v1.Container
 			for _, container := range item.Spec.Template.Spec.Containers {
 				switch container.Name {
-				case "csi-external-health-monitor-agent":
+				case "csi-external-health-monitor-agent", "csi-external-health-monitor-controller":
 					// Remove these containers.
 				default:
 					// Keep the others.
@@ -401,16 +411,16 @@ func (c *MockCSICalls) LogGRPC(method string, request, reply interface{}, err er
 		// "" on no error.
 		Error string
 		// Full error dump, to be able to parse out full gRPC error code and message separately in a test.
-		FullError error
+		FullError *spb.Status
 	}{
-		Method:    method,
-		Request:   request,
-		Response:  reply,
-		FullError: err,
+		Method:   method,
+		Request:  request,
+		Response: reply,
 	}
 
 	if err != nil {
 		logMessage.Error = err.Error()
+		logMessage.FullError = grpcstatus.Convert(err).Proto()
 	}
 
 	msg, _ := json.Marshal(logMessage)
@@ -786,6 +796,7 @@ func InitGcePDCSIDriver() storageframework.TestDriver {
 				storageframework.CapVolumeLimits:        false,
 				storageframework.CapTopology:            true,
 				storageframework.CapControllerExpansion: true,
+				storageframework.CapOnlineExpansion:     true,
 				storageframework.CapNodeExpansion:       true,
 				storageframework.CapSnapshotDataSource:  true,
 			},
